@@ -1,3 +1,4 @@
+
 {
   "name": "Receipts API",
   "dockerComposeFile": "docker-compose.yml",

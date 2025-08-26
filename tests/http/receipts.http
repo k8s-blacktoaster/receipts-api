@@ -1,0 +1,71 @@
+### Receipts API Tests
+@base_url = http://localhost:8080
+
+### Health Check
+GET {{base_url}}/api/v1/health
+
+### Create a new receipt
+POST {{base_url}}/api/v1/receipts
+Content-Type: application/json
+
+{
+  "store_name": "Sephora",
+  "store_category": "Beauty & Cosmetics",
+  "store_address": "26736 Portola Parkway Suite 6-C, Foothill Ranch, CA 92610",
+  "store_phone": "(949) 382-1982",
+  "date": "2024-08-25",
+  "subtotal": 19.00,
+  "items": [
+    {
+      "sku": "2380749",
+      "name": "OS EYE PENCIL BOHIAS BLK",
+      "description": "12HR Contour Eye Pencil Eyeliner in Bodacious Black - waterproof gel eyeliner pencil",
+      "quantity": 1,
+      "unit_price": 19.00
+    }
+  ]
+}
+
+### Create another receipt for testing
+POST {{base_url}}/api/v1/receipts
+Content-Type: application/json
+
+{
+  "store_name": "Target",
+  "store_category": "Retail",
+  "store_address": "123 Main St, Anytown, CA 90210",
+  "store_phone": "(555) 123-4567",
+  "date": "2024-08-26",
+  "subtotal": 45.99,
+  "items": [
+    {
+      "sku": "TARGET001",
+      "name": "Household Cleaner",
+      "description": "Multi-purpose household cleaning spray",
+      "quantity": 2,
+      "unit_price": 12.99
+    },
+    {
+      "sku": "TARGET002", 
+      "name": "Paper Towels",
+      "description": "6-pack premium paper towels",
+      "quantity": 1,
+      "unit_price": 19.99
+    }
+  ]
+}
+
+### Get all receipts
+GET {{base_url}}/api/v1/receipts
+
+### Get a specific receipt by ID (replace {id} with actual ID from creation)
+GET {{base_url}}/api/v1/receipts/1
+
+### Get another receipt by ID
+GET {{base_url}}/api/v1/receipts/2
+
+### Delete a receipt (replace {id} with actual ID)
+DELETE {{base_url}}/api/v1/receipts/1
+
+### Verify deletion - should return 404
+GET {{base_url}}/api/v1/receipts/1

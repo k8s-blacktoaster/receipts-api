@@ -15,7 +15,7 @@ import (
 	_ "receipts-db/docs" // This is required for Swagger
 )
 
-func New(productHandler *handlers.ProductHandler, logger *slog.Logger) http.Handler {
+func New(receiptHandler *handlers.ReceiptHandler, logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	// Middleware stack
@@ -29,14 +29,14 @@ func New(productHandler *handlers.ProductHandler, logger *slog.Logger) http.Hand
 		httpSwagger.URL("/swagger/doc.json"), // Use relative URL instead of absolute
 	))
 
-	r.Get("/api/v1/health", productHandler.HealthCheck)
+	r.Get("/api/v1/health", receiptHandler.HealthCheck)
 
-	r.Route("/api/v1/products", func(r chi.Router) {
-		r.Get("/", productHandler.ListProducts)         // GET /api/v1/products
-		r.Post("/", productHandler.CreateProduct)       // POST /api/v1/products
-		r.Get("/{id}", productHandler.GetProduct)       // GET /api/v1/products/{id}
-		r.Put("/{id}", productHandler.UpdateProduct)    // PUT /api/v1/products/{id}
-		r.Delete("/{id}", productHandler.DeleteProduct) // DELETE /api/v1/products/{id}
+	r.Route("/api/v1/receipts", func(r chi.Router) {
+		r.Get("/", receiptHandler.ListReceipts)         // GET /api/v1/receipts
+		r.Post("/", receiptHandler.CreateReceipt)       // POST /api/v1/receipts
+		r.Get("/{id}", receiptHandler.GetReceipt)       // GET /api/v1/receipts/{id}
+		r.Put("/{id}", receiptHandler.UpdateReceipt)    // PUT /api/v1/receipts/{id}
+		r.Delete("/{id}", receiptHandler.DeleteReceipt) // DELETE /api/v1/receipts/{id}
 	})
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {

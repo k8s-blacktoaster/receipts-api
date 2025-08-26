@@ -48,7 +48,7 @@ func main() {
 	}
 
 	logger := setupLogger(cfg.LogLevel)
-	logger.Info("starting receipts-db",
+	logger.Info("starting receipts-api",
 		"environment", cfg.Environment,
 		"port", cfg.Port,
 		"database_type", "postgres",
@@ -83,11 +83,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	productRepo := repository.NewProductRepository(db)
+	receiptRepo := repository.NewReceiptRepository(db)
 
-	productHandler := handlers.NewProductHandler(productRepo, logger)
+	receiptHandler := handlers.NewReceiptHandler(receiptRepo, logger)
 
-	handler := router.New(productHandler, logger)
+	handler := router.New(receiptHandler, logger)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),

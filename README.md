@@ -87,25 +87,35 @@ After cloning, customize the following placeholders:
 
 ## API Endpoints
 
-The template includes a complete Product CRUD API:
+The API includes a complete Receipts CRUD API:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/v1/health` | Health check endpoint |
-| GET | `/api/v1/products` | List all products (paginated) |
-| GET | `/api/v1/products/{id}` | Get a single product |
-| POST | `/api/v1/products` | Create a new product |
-| PUT | `/api/v1/products/{id}` | Update an existing product |
-| DELETE | `/api/v1/products/{id}` | Delete a product |
+| GET | `/api/v1/receipts` | List all receipts |
+| GET | `/api/v1/receipts/{id}` | Get a single receipt |
+| POST | `/api/v1/receipts` | Create a new receipt |
+| PUT | `/api/v1/receipts/{id}` | Update an existing receipt |
+| DELETE | `/api/v1/receipts/{id}` | Delete a receipt |
 
-### Example Product JSON:
+### Example Receipt JSON:
 ```json
 {
-  "sku": "1234567",
-  "name": "some product",
-  "description": "a pretty cool product",
-  "quantity": 1,
-  "unit_price": 19.99
+  "store_name": "Sephora",
+  "store_category": "Beauty & Cosmetics",
+  "store_address": "26736 Portola Parkway Suite 6-C, Foothill Ranch, CA 92610",
+  "store_phone": "(949) 382-1982",
+  "date": "2024-08-25",
+  "subtotal": 19.00,
+  "items": [
+    {
+      "sku": "2380749",
+      "name": "OS EYE PENCIL BOHIAS BLK",
+      "description": "12HR Contour Eye Pencil Eyeliner in Bodacious Black - waterproof gel eyeliner pencil",
+      "quantity": 1,
+      "unit_price": 19.00
+    }
+  ]
 }
 ```
 
@@ -169,6 +179,8 @@ DB_MAX_IDLE=5
 ```
 
 ### Testing
+
+#### Unit Tests
 ```bash
 # Run tests
 go test ./...
@@ -179,6 +191,22 @@ go test -cover ./...
 # Run specific test
 go test -v ./internal/repository
 ```
+
+#### HTTP API Tests
+Manual API testing is available using HTTP files in the `tests/http/` directory:
+
+1. **Start the API server:**
+   ```bash
+   go run cmd/api/main.go
+   ```
+
+2. **Run HTTP tests:**
+   - Use any HTTP client that supports `.http` files (VS Code REST Client, IntelliJ HTTP Client, etc.)
+   - Open `tests/http/receipts.http`
+   - Execute requests to test CRUD operations
+
+3. **Available test files:**
+   - `receipts.http` - Receipt CRUD operations (POST, GET, DELETE) with base URL configured
 
 ### Building
 ```bash

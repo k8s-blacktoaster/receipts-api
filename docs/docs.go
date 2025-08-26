@@ -47,9 +47,9 @@ const docTemplate = `{
                 }
             }
         },
-        "/products": {
+        "/receipts": {
             "get": {
-                "description": "Get a paginated list of products in inventory",
+                "description": "Get a paginated list of receipts",
                 "consumes": [
                     "application/json"
                 ],
@@ -57,9 +57,9 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "products"
+                    "receipts"
                 ],
-                "summary": "List products",
+                "summary": "List receipts",
                 "parameters": [
                     {
                         "type": "integer",
@@ -78,7 +78,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "List of products with pagination metadata",
+                        "description": "List of receipts with pagination metadata",
                         "schema": {
                             "$ref": "#/definitions/models.PaginatedResponse"
                         }
@@ -92,7 +92,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Create a new product in the inventory",
+                "description": "Create a new receipt with items",
                 "consumes": [
                     "application/json"
                 ],
@@ -100,35 +100,29 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "products"
+                    "receipts"
                 ],
-                "summary": "Create a new product",
+                "summary": "Create a new receipt",
                 "parameters": [
                     {
-                        "description": "Product data",
-                        "name": "product",
+                        "description": "Receipt data",
+                        "name": "receipt",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/models.Product"
+                            "$ref": "#/definitions/models.Receipt"
                         }
                     }
                 ],
                 "responses": {
                     "201": {
-                        "description": "Created product",
+                        "description": "Created receipt",
                         "schema": {
                             "$ref": "#/definitions/models.SuccessResponse"
                         }
                     },
                     "400": {
                         "description": "Bad request",
-                        "schema": {
-                            "$ref": "#/definitions/models.ErrorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Product with SKU already exists",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -142,9 +136,9 @@ const docTemplate = `{
                 }
             }
         },
-        "/products/{id}": {
+        "/receipts/{id}": {
             "get": {
-                "description": "Get a single product with all details",
+                "description": "Get a single receipt with all details and items",
                 "consumes": [
                     "application/json"
                 ],
@@ -152,13 +146,13 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "products"
+                    "receipts"
                 ],
-                "summary": "Get product by ID",
+                "summary": "Get receipt by ID",
                 "parameters": [
                     {
                         "type": "integer",
-                        "description": "Product ID",
+                        "description": "Receipt ID",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -166,7 +160,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "Product details",
+                        "description": "Receipt details",
                         "schema": {
                             "$ref": "#/definitions/models.SuccessResponse"
                         }
@@ -178,7 +172,7 @@ const docTemplate = `{
                         }
                     },
                     "404": {
-                        "description": "Product not found",
+                        "description": "Receipt not found",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -192,7 +186,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "Update an existing product's information",
+                "description": "Update an existing receipt's information",
                 "consumes": [
                     "application/json"
                 ],
@@ -200,30 +194,30 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "products"
+                    "receipts"
                 ],
-                "summary": "Update product",
+                "summary": "Update receipt",
                 "parameters": [
                     {
                         "type": "integer",
-                        "description": "Product ID",
+                        "description": "Receipt ID",
                         "name": "id",
                         "in": "path",
                         "required": true
                     },
                     {
-                        "description": "Updated product data",
-                        "name": "product",
+                        "description": "Updated receipt data",
+                        "name": "receipt",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/models.Product"
+                            "$ref": "#/definitions/models.Receipt"
                         }
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Updated product",
+                        "description": "Updated receipt",
                         "schema": {
                             "$ref": "#/definitions/models.SuccessResponse"
                         }
@@ -235,7 +229,7 @@ const docTemplate = `{
                         }
                     },
                     "404": {
-                        "description": "Product not found",
+                        "description": "Receipt not found",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -249,7 +243,7 @@ const docTemplate = `{
                 }
             },
             "delete": {
-                "description": "Delete a product by ID",
+                "description": "Delete a receipt by ID",
                 "consumes": [
                     "application/json"
                 ],
@@ -257,13 +251,13 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "products"
+                    "receipts"
                 ],
-                "summary": "Delete product",
+                "summary": "Delete receipt",
                 "parameters": [
                     {
                         "type": "integer",
-                        "description": "Product ID",
+                        "description": "Receipt ID",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -271,7 +265,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "204": {
-                        "description": "Product deleted successfully",
+                        "description": "Receipt deleted successfully",
                         "schema": {
                             "$ref": "#/definitions/models.SuccessResponse"
                         }
@@ -283,7 +277,7 @@ const docTemplate = `{
                         }
                     },
                     "404": {
-                        "description": "Product not found",
+                        "description": "Receipt not found",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -351,7 +345,46 @@ const docTemplate = `{
                 }
             }
         },
-        "models.Product": {
+        "models.Receipt": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "description": "Metadata",
+                    "type": "string"
+                },
+                "date": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ReceiptItem"
+                    }
+                },
+                "store_address": {
+                    "type": "string"
+                },
+                "store_category": {
+                    "type": "string"
+                },
+                "store_name": {
+                    "type": "string"
+                },
+                "store_phone": {
+                    "type": "string"
+                },
+                "subtotal": {
+                    "type": "number"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.ReceiptItem": {
             "type": "object",
             "properties": {
                 "created_at": {

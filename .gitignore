@@ -46,6 +46,9 @@ Thumbs.db
 # Application binary
 gitlab-readiness-api
 
+# Debug binaries
+__debug_bin*
+
 # Temporary files
 *.tmp
 *.temp
