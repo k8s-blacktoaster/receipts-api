@@ -1,0 +1,157 @@
+@baseUrl = http://localhost:8080/api/v1
+
+### Health Check
+GET {{baseUrl}}/health
+
+### Create a new project
+POST {{baseUrl}}/gitlab/projects
+Content-Type: application/json
+
+{
+  "project_id": "project-123",
+  "project_present": true,
+  "app_name_set": true,
+  "moab_id_set": false,
+  "codeowners_exists": true,
+  "branch_protection_enabled": true,
+  "codeowner_approval_required": true,
+  "push_merge_restricted": true,
+  "force_push_disabled": true,
+  "push_rules_enabled": true,
+  "min_approvals_required": true,
+  "author_approval_prevented": true,
+  "committer_approval_prevented": true,
+  "approvals_removed_on_commit": true
+}
+
+### Create another project (production ready)
+POST {{baseUrl}}/gitlab/projects
+Content-Type: application/json
+
+{
+  "project_id": "prod-ready-456",
+  "project_present": true,
+  "app_name_set": true,
+  "moab_id_set": true,
+  "codeowners_exists": true,
+  "branch_protection_enabled": true,
+  "codeowner_approval_required": true,
+  "push_merge_restricted": true,
+  "force_push_disabled": true,
+  "push_rules_enabled": true,
+  "min_approvals_required": true,
+  "author_approval_prevented": true,
+  "committer_approval_prevented": true,
+  "approvals_removed_on_commit": true
+}
+
+### Create a project with minimal checks
+POST {{baseUrl}}/gitlab/projects
+Content-Type: application/json
+
+{
+  "project_id": "minimal-789",
+  "project_present": true,
+  "app_name_set": false,
+  "moab_id_set": false,
+  "codeowners_exists": false,
+  "branch_protection_enabled": false,
+  "codeowner_approval_required": false,
+  "push_merge_restricted": false,
+  "force_push_disabled": false,
+  "push_rules_enabled": false,
+  "min_approvals_required": false,
+  "author_approval_prevented": false,
+  "committer_approval_prevented": false,
+  "approvals_removed_on_commit": false
+}
+
+### Get all projects (default pagination)
+GET {{baseUrl}}/gitlab/projects
+
+### Get all projects with pagination
+GET {{baseUrl}}/gitlab/projects?limit=2&offset=0
+
+### Get a specific project
+GET {{baseUrl}}/gitlab/projects/project-123
+
+### Get the production ready project
+GET {{baseUrl}}/gitlab/projects/prod-ready-456
+
+### Get the minimal project
+GET {{baseUrl}}/gitlab/projects/minimal-789
+
+### Update a project (fix the moab_id_set check)
+PUT {{baseUrl}}/gitlab/projects/project-123
+Content-Type: application/json
+
+{
+  "project_present": true,
+  "app_name_set": true,
+  "moab_id_set": true,
+  "codeowners_exists": true,
+  "branch_protection_enabled": true,
+  "codeowner_approval_required": true,
+  "push_merge_restricted": true,
+  "force_push_disabled": true,
+  "push_rules_enabled": true,
+  "min_approvals_required": true,
+  "author_approval_prevented": true,
+  "committer_approval_prevented": true,
+  "approvals_removed_on_commit": true
+}
+
+### Update minimal project to add some checks
+PUT {{baseUrl}}/gitlab/projects/minimal-789
+Content-Type: application/json
+
+{
+  "project_present": true,
+  "app_name_set": true,
+  "moab_id_set": true,
+  "codeowners_exists": true,
+  "branch_protection_enabled": false,
+  "codeowner_approval_required": false,
+  "push_merge_restricted": false,
+  "force_push_disabled": false,
+  "push_rules_enabled": false,
+  "min_approvals_required": false,
+  "author_approval_prevented": false,
+  "committer_approval_prevented": false,
+  "approvals_removed_on_commit": false
+}
+
+### Delete a project
+DELETE {{baseUrl}}/gitlab/projects/minimal-789
+
+### Try to get deleted project (should return 404)
+GET {{baseUrl}}/gitlab/projects/minimal-789
+
+### Try to create project with same ID (should return 409)
+POST {{baseUrl}}/gitlab/projects
+Content-Type: application/json
+
+{
+  "project_id": "project-123",
+  "project_present": true
+}
+
+### Try to update non-existent project (should return 404)
+PUT {{baseUrl}}/gitlab/projects/does-not-exist
+Content-Type: application/json
+
+{
+  "project_present": true
+}
+
+### Try to delete non-existent project (should return 404)
+DELETE {{baseUrl}}/gitlab/projects/does-not-exist
+
+### Create project with invalid JSON (should return 400)
+POST {{baseUrl}}/gitlab/projects
+Content-Type: application/json
+
+{
+  "project_id": "invalid",
+  "invalid_field": true,
+}

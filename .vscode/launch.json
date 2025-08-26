@@ -1,0 +1,33 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch API",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/cmd/api",
+      "env": {
+        "DATABASE_URL": "postgres://postgres:postgres@db:5432/receipts_db?sslmode=disable",
+        "LOG_LEVEL": "debug",
+        "ENVIRONMENT": "development"
+      },
+      "args": [],
+      "showLog": true,
+      "buildFlags": "-buildvcs=false"
+    },
+    {
+      "name": "Debug Current Test",
+      "type": "go",
+      "request": "launch",
+      "mode": "test",
+      "program": "${fileDirname}",
+      "env": {
+        "DATABASE_URL": "postgres://postgres:postgres@db:5432/receipts_db_test?sslmode=disable",
+        "LOG_LEVEL": "debug"
+      },
+      "args": ["-test.v"],
+      "buildFlags": "-buildvcs=false"
+    }
+  ]
+}

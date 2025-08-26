@@ -1,0 +1,103 @@
+@baseUrl = http://localhost:8080/api/v1
+
+### Step 1: Check API health
+GET {{baseUrl}}/health
+
+### Step 2: Create a new project with initial incomplete checks
+POST {{baseUrl}}/gitlab/projects
+Content-Type: application/json
+
+{
+  "project_id": "workflow-example-001",
+  "project_present": true,
+  "app_name_set": false,
+  "moab_id_set": false,
+  "codeowners_exists": false,
+  "branch_protection_enabled": false,
+  "codeowner_approval_required": false,
+  "push_merge_restricted": false,
+  "force_push_disabled": false,
+  "push_rules_enabled": false,
+  "min_approvals_required": false,
+  "author_approval_prevented": false,
+  "committer_approval_prevented": false,
+  "approvals_removed_on_commit": false
+}
+
+### Step 3: Check the project status (should show failed checks)
+GET {{baseUrl}}/gitlab/projects/workflow-example-001
+
+### Step 4: Team fixes some issues, update the project
+PUT {{baseUrl}}/gitlab/projects/workflow-example-001
+Content-Type: application/json
+
+{
+  "project_present": true,
+  "app_name_set": true,
+  "moab_id_set": true,
+  "codeowners_exists": true,
+  "branch_protection_enabled": false,
+  "codeowner_approval_required": false,
+  "push_merge_restricted": false,
+  "force_push_disabled": false,
+  "push_rules_enabled": false,
+  "min_approvals_required": false,
+  "author_approval_prevented": false,
+  "committer_approval_prevented": false,
+  "approvals_removed_on_commit": false
+}
+
+### Step 5: Check project status again (fewer failed checks)
+GET {{baseUrl}}/gitlab/projects/workflow-example-001
+
+### Step 6: Team completes all requirements
+PUT {{baseUrl}}/gitlab/projects/workflow-example-001
+Content-Type: application/json
+
+{
+  "project_present": true,
+  "app_name_set": true,
+  "moab_id_set": true,
+  "codeowners_exists": true,
+  "branch_protection_enabled": true,
+  "codeowner_approval_required": true,
+  "push_merge_restricted": true,
+  "force_push_disabled": true,
+  "push_rules_enabled": true,
+  "min_approvals_required": true,
+  "author_approval_prevented": true,
+  "committer_approval_prevented": true,
+  "approvals_removed_on_commit": true
+}
+
+### Step 7: Final check - should be production ready!
+GET {{baseUrl}}/gitlab/projects/workflow-example-001
+
+### Step 8: List all projects to see overall status
+GET {{baseUrl}}/gitlab/projects
+
+### Step 9: Simulate a regression - some checks fail again
+PUT {{baseUrl}}/gitlab/projects/workflow-example-001
+Content-Type: application/json
+
+{
+  "project_present": true,
+  "app_name_set": true,
+  "moab_id_set": true,
+  "codeowners_exists": true,
+  "branch_protection_enabled": false,
+  "codeowner_approval_required": false,
+  "push_merge_restricted": true,
+  "force_push_disabled": true,
+  "push_rules_enabled": true,
+  "min_approvals_required": true,
+  "author_approval_prevented": true,
+  "committer_approval_prevented": true,
+  "approvals_removed_on_commit": true
+}
+
+### Step 10: Check status after regression
+GET {{baseUrl}}/gitlab/projects/workflow-example-001
+
+### Cleanup: Remove the test project
+DELETE {{baseUrl}}/gitlab/projects/workflow-example-001

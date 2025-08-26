@@ -1,0 +1,63 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+bin/
+
+# Output of the go coverage tool
+*.out
+coverage.html
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# Environment files
+.claude/
+.local/
+.env
+.env.local
+.env.*.local
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# IDE specific files
+.idea/
+*.swp
+*.swo
+*~
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Application binary
+gitlab-readiness-api
+
+# Temporary files
+*.tmp
+*.temp
+
+# Log files
+*.log
+
+# Data directory (for local development)
+data/
+
+# Air tmp directory (hot reload)
+tmp/
+# Generated Swagger documentation
+docs/swagger.json
+docs/swagger.yaml

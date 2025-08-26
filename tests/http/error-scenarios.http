@@ -1,0 +1,96 @@
+@baseUrl = http://localhost:8080/api/v1
+
+### Test invalid endpoint (should return 404)
+GET {{baseUrl}}/invalid-endpoint
+
+### Test invalid HTTP method on valid endpoint (should return 405)
+PATCH {{baseUrl}}/gitlab/projects
+
+### Create project without project_id (should return 400)
+POST {{baseUrl}}/gitlab/projects
+Content-Type: application/json
+
+{
+  "project_present": true,
+  "app_name_set": true
+}
+
+### Create project with empty project_id (should return 400)
+POST {{baseUrl}}/gitlab/projects
+Content-Type: application/json
+
+{
+  "project_id": "",
+  "project_present": true
+}
+
+### Create project with malformed JSON (should return 400)
+POST {{baseUrl}}/gitlab/projects
+Content-Type: application/json
+
+{
+  "project_id": "malformed"
+  "missing_comma": true
+}
+
+### Update project without project ID in URL (should return 404)
+PUT {{baseUrl}}/gitlab/projects/
+Content-Type: application/json
+
+{
+  "project_present": true
+}
+
+### Get project without ID (should return 404)
+GET {{baseUrl}}/gitlab/projects/
+
+### Test with very long project ID
+POST {{baseUrl}}/gitlab/projects
+Content-Type: application/json
+
+{
+  "project_id": "very-long-project-id-that-might-cause-issues-in-some-systems-but-should-be-handled-gracefully-by-our-api-endpoint-implementation",
+  "project_present": true,
+  "app_name_set": true,
+  "moab_id_set": true,
+  "codeowners_exists": true,
+  "branch_protection_enabled": true,
+  "codeowner_approval_required": true,
+  "push_merge_restricted": true,
+  "force_push_disabled": true,
+  "push_rules_enabled": true,
+  "min_approvals_required": true,
+  "author_approval_prevented": true,
+  "committer_approval_prevented": true,
+  "approvals_removed_on_commit": true
+}
+
+### Test with special characters in project ID
+POST {{baseUrl}}/gitlab/projects
+Content-Type: application/json
+
+{
+  "project_id": "project-with-special-chars-!@#$%^&*()",
+  "project_present": true,
+  "app_name_set": true,
+  "moab_id_set": true,
+  "codeowners_exists": true,
+  "branch_protection_enabled": true,
+  "codeowner_approval_required": true,
+  "push_merge_restricted": true,
+  "force_push_disabled": true,
+  "push_rules_enabled": true,
+  "min_approvals_required": true,
+  "author_approval_prevented": true,
+  "committer_approval_prevented": true,
+  "approvals_removed_on_commit": true
+}
+
+### Test pagination with invalid parameters
+GET {{baseUrl}}/gitlab/projects?limit=invalid&offset=also-invalid
+
+### Test pagination with negative values
+GET {{baseUrl}}/gitlab/projects?limit=-10&offset=-5
+
+### Test pagination with very large values
+GET {{baseUrl}}/gitlab/projects?limit=999999&offset=999999

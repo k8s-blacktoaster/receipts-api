@@ -1,0 +1,214 @@
+@baseUrl = http://localhost:8080/api/v1
+
+### Create multiple projects quickly
+
+POST {{baseUrl}}/gitlab/projects
+Content-Type: application/json
+
+{
+  "project_id": "perf-test-001",
+  "project_present": true,
+  "app_name_set": true,
+  "moab_id_set": true,
+  "codeowners_exists": true,
+  "branch_protection_enabled": true,
+  "codeowner_approval_required": true,
+  "push_merge_restricted": true,
+  "force_push_disabled": true,
+  "push_rules_enabled": true,
+  "min_approvals_required": true,
+  "author_approval_prevented": true,
+  "committer_approval_prevented": true,
+  "approvals_removed_on_commit": true
+}
+
+###
+
+POST {{baseUrl}}/gitlab/projects
+Content-Type: application/json
+
+{
+  "project_id": "perf-test-002",
+  "project_present": true,
+  "app_name_set": false,
+  "moab_id_set": true,
+  "codeowners_exists": true,
+  "branch_protection_enabled": false,
+  "codeowner_approval_required": true,
+  "push_merge_restricted": true,
+  "force_push_disabled": false,
+  "push_rules_enabled": true,
+  "min_approvals_required": true,
+  "author_approval_prevented": false,
+  "committer_approval_prevented": true,
+  "approvals_removed_on_commit": true
+}
+
+###
+
+POST {{baseUrl}}/gitlab/projects
+Content-Type: application/json
+
+{
+  "project_id": "perf-test-003",
+  "project_present": true,
+  "app_name_set": true,
+  "moab_id_set": false,
+  "codeowners_exists": false,
+  "branch_protection_enabled": true,
+  "codeowner_approval_required": false,
+  "push_merge_restricted": false,
+  "force_push_disabled": true,
+  "push_rules_enabled": false,
+  "min_approvals_required": false,
+  "author_approval_prevented": true,
+  "committer_approval_prevented": false,
+  "approvals_removed_on_commit": false
+}
+
+###
+
+POST {{baseUrl}}/gitlab/projects
+Content-Type: application/json
+
+{
+  "project_id": "perf-test-004",
+  "project_present": false,
+  "app_name_set": false,
+  "moab_id_set": false,
+  "codeowners_exists": false,
+  "branch_protection_enabled": false,
+  "codeowner_approval_required": false,
+  "push_merge_restricted": false,
+  "force_push_disabled": false,
+  "push_rules_enabled": false,
+  "min_approvals_required": false,
+  "author_approval_prevented": false,
+  "committer_approval_prevented": false,
+  "approvals_removed_on_commit": false
+}
+
+###
+
+POST {{baseUrl}}/gitlab/projects
+Content-Type: application/json
+
+{
+  "project_id": "perf-test-005",
+  "project_present": true,
+  "app_name_set": true,
+  "moab_id_set": true,
+  "codeowners_exists": true,
+  "branch_protection_enabled": true,
+  "codeowner_approval_required": true,
+  "push_merge_restricted": true,
+  "force_push_disabled": true,
+  "push_rules_enabled": true,
+  "min_approvals_required": true,
+  "author_approval_prevented": true,
+  "committer_approval_prevented": true,
+  "approvals_removed_on_commit": true
+}
+
+### Test pagination performance with different page sizes
+
+# Small page size
+GET {{baseUrl}}/gitlab/projects?limit=2&offset=0
+
+### 
+
+# Medium page size
+GET {{baseUrl}}/gitlab/projects?limit=10&offset=0
+
+###
+
+# Large page size
+GET {{baseUrl}}/gitlab/projects?limit=50&offset=0
+
+###
+
+# Test offset performance
+GET {{baseUrl}}/gitlab/projects?limit=2&offset=2
+
+###
+
+GET {{baseUrl}}/gitlab/projects?limit=2&offset=4
+
+### Rapid individual project lookups
+GET {{baseUrl}}/gitlab/projects/perf-test-001
+
+###
+
+GET {{baseUrl}}/gitlab/projects/perf-test-002
+
+###
+
+GET {{baseUrl}}/gitlab/projects/perf-test-003
+
+###
+
+GET {{baseUrl}}/gitlab/projects/perf-test-004
+
+###
+
+GET {{baseUrl}}/gitlab/projects/perf-test-005
+
+### Rapid updates (simulating frequent check updates)
+PUT {{baseUrl}}/gitlab/projects/perf-test-001
+Content-Type: application/json
+
+{
+  "project_present": true,
+  "app_name_set": false,
+  "moab_id_set": true,
+  "codeowners_exists": true,
+  "branch_protection_enabled": true,
+  "codeowner_approval_required": true,
+  "push_merge_restricted": true,
+  "force_push_disabled": true,
+  "push_rules_enabled": true,
+  "min_approvals_required": true,
+  "author_approval_prevented": true,
+  "committer_approval_prevented": true,
+  "approvals_removed_on_commit": true
+}
+
+###
+
+PUT {{baseUrl}}/gitlab/projects/perf-test-002
+Content-Type: application/json
+
+{
+  "project_present": true,
+  "app_name_set": true,
+  "moab_id_set": true,
+  "codeowners_exists": true,
+  "branch_protection_enabled": true,
+  "codeowner_approval_required": true,
+  "push_merge_restricted": true,
+  "force_push_disabled": true,
+  "push_rules_enabled": true,
+  "min_approvals_required": true,
+  "author_approval_prevented": true,
+  "committer_approval_prevented": true,
+  "approvals_removed_on_commit": true
+}
+
+### Cleanup - Delete all performance test projects
+DELETE {{baseUrl}}/gitlab/projects/perf-test-001
+
+###
+
+DELETE {{baseUrl}}/gitlab/projects/perf-test-002
+
+###
+
+DELETE {{baseUrl}}/gitlab/projects/perf-test-003
+
+###
+
+DELETE {{baseUrl}}/gitlab/projects/perf-test-004
+
+###
+
+DELETE {{baseUrl}}/gitlab/projects/perf-test-005

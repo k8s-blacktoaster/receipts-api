@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ..:/workspace:cached
+    command: sleep infinity
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@db:5432/receipts_db?sslmode=disable
+    networks:
+      - devcontainer_network
+    depends_on:
+      - db
+    ports:
+      - "8080:8080"
+      - "5432:5432"
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: receipts_db
+    networks:
+      - devcontainer_network
+
+networks:
+  devcontainer_network:
+    driver: bridge
+
+volumes:
+  postgres-data:
