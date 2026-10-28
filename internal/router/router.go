@@ -15,7 +15,7 @@ import (
 	_ "receipts-db/docs" // This is required for Swagger
 )
 
-func New(receiptHandler *handlers.ReceiptHandler, logger *slog.Logger) http.Handler {
+func New(receiptHandler *handlers.ReceiptHandler, uploadHandler *handlers.UploadHandler, logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	// Middleware stack
@@ -37,7 +37,14 @@ func New(receiptHandler *handlers.ReceiptHandler, logger *slog.Logger) http.Hand
 		r.Get("/{id}", receiptHandler.GetReceipt)       // GET /api/v1/receipts/{id}
 		r.Put("/{id}", receiptHandler.UpdateReceipt)    // PUT /api/v1/receipts/{id}
 		r.Delete("/{id}", receiptHandler.DeleteReceipt) // DELETE /api/v1/receipts/{id}
+		if uploadHandler != nil {
+			r.Post("/{id}/extract", uploadHandler.ReextractReceipt) // POST /api/v1/receipts/{id}/extract
+		}
 	})
+
+	if uploadHandler != nil {
+		r.Post("/api/v1/uploads", uploadHandler.UploadReceiptPhoto) // POST /api/v1/uploads (multipart)
+	}
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

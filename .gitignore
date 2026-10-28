@@ -64,3 +64,6 @@ tmp/
 # Generated Swagger documentation
 docs/swagger.json
 docs/swagger.yaml
+
+# local receipt photos for manual HTTP tests
+tests/http/fixtures/

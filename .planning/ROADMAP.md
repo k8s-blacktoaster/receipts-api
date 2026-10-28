@@ -1,7 +1,7 @@
 # Roadmap: receipts-api v1.0
 
-- [x] **Phase 1: Schema & model hardening** - merchants/stores, line items, products/aliases, members, pipeline status, cents money (executed 2026-10-27; pending /gsd-verify-work)
-- [ ] **Phase 2: Upload + extraction pipeline** - photo upload, object store, queue, pluggable vision LLM (Grok default), validation
+- [x] **Phase 1: Schema & model hardening** - merchants/stores, line items, products/aliases, members, pipeline status, cents money (merged 2026-10-27, PR #1)
+- [x] **Phase 2: Upload + extraction pipeline** - photo upload, object store, queue, pluggable vision LLM (Grok default), validation
 - [ ] **Phase 3: Mobile web UI** - camera capture, multi-photo, upload status, receipt list, review/edit
 - [ ] **Phase 4: Normalization & review** - product matching, alias learning, review endpoints
 - [ ] **Phase 5: MCP server** - read-only tools over Streamable HTTP + auth
@@ -27,11 +27,13 @@
     config (`EXTRACTOR_PROVIDER`, model name). API key from k8s Secret / env var only.
   - Tests run against recorded fixtures and a mock provider; no live API calls in CI.
   - Status transitions: uploaded -> parsing -> parsed | needs_review | failed (parse_error).
-  - ingest_jobs queue table lands here.
+  - ingest_jobs queue table deferred: receipts.status is the durable state (re-queued on start).
 **Success Criteria**:
   1. POST /api/v1/uploads returns 202 + job id; duplicate image returns existing receipt
   2. Golden set of 20 real receipts across several merchants: total matches on >=95%
   3. Mismatched receipts land in needs_review, never silently saved as parsed
+**Plans**: 02-01 (phases/02-upload-extraction)
+**Status**: Executed - see 02-01-SUMMARY.md (golden-set run pending real photos + key)
 
 ### Phase 3: Mobile web UI
 **Depends on**: Phase 2
@@ -43,7 +45,7 @@ assets embedded in the Go binary (`embed`), served by the same deployment, VPN-o
 
 ### Phase 4: Normalization & review
 **Depends on**: Phase 2 (UI from Phase 3 consumes it)
-**Requirements**: NORM-01, NORM-02
+**Requirements**: NORM-01..NORM-03 (NORM-03: colliding aliases kept with item_number cleared, not dropped)
 **Success Criteria**: >=90% of lines with an item number/UPC auto-map; corrections create merchant-scoped aliases reused next time (pg_trgm fuzzy indexes land here)
 
 ### Phase 5: MCP server
@@ -55,7 +57,7 @@ trigram index from migration 006.
 
 ### Phase 6: Kubernetes deploy & backups
 **Depends on**: Phase 2 (can run in parallel with 3-5)
-**Requirements**: OPS-01, OPS-02
+**Requirements**: OPS-01..OPS-03 (OPS-03: UTF-8 locale/collation, or explicit collation in merchant_name_key)
 
 ### Phase 7: Legacy column cleanup (later)
 **Depends on**: Phases 2-4 (all readers on merchant_id/store_id)

@@ -29,9 +29,12 @@ import (
 	"github.com/joho/godotenv"
 	"receipts-db/internal/config"
 	"receipts-db/internal/database"
+	"receipts-db/internal/extraction"
 	"receipts-db/internal/handlers"
+	"receipts-db/internal/redact"
 	"receipts-db/internal/repository"
 	"receipts-db/internal/router"
+	"receipts-db/internal/storage"
 )
 
 func main() {
@@ -87,13 +90,53 @@ func main() {
 
 	receiptHandler := handlers.NewReceiptHandler(receiptRepo, logger)
 
-	handler := router.New(receiptHandler, logger)
+	// ---- photo upload + extraction (phase 2) ----
+	docRepo := repository.NewSourceDocumentRepository(db)
+	blobs, err := storage.NewLocal(cfg.UploadDir)
+	if err != nil {
+		logger.Error("failed to init upload storage", "error", err)
+		os.Exit(1)
+	}
+	provider, err := extraction.NewProvider(extraction.Config{
+		Provider: cfg.ExtractionProvider, Model: cfg.ExtractionModel, XAIAPIKey: cfg.XAIAPIKey,
+		XAIBaseURL: cfg.XAIBaseURL, Timeout: time.Duration(cfg.ExtractionTimeoutSec) * time.Second,
+	})
+	if err != nil {
+		// uploads still work; receipts stay "uploaded" until a provider is configured
+		logger.Warn("extraction disabled", "reason", redact.String(err.Error()))
+		provider = nil
+	}
+	workerCtx, stopWorkers := context.WithCancel(context.Background())
+	defer stopWorkers()
+	var queue *extraction.Queue
+	if provider == nil && err == nil {
+		logger.Warn("extraction disabled", "reason", "EXTRACTION_PROVIDER=none")
+	}
+	if provider != nil {
+		logger.Info("extraction enabled", "provider", provider.Name(), "model", provider.Model())
+		pipeline := &extraction.Pipeline{Receipts: receiptRepo, Docs: docRepo, Blobs: blobs, Provider: provider,
+			ToleranceCents: cfg.ExtractionToleranceCents, Logger: logger}
+		queue = extraction.NewQueue(pipeline, 100, time.Duration(cfg.ExtractionTimeoutSec+30)*time.Second, logger)
+		queue.Start(workerCtx, cfg.ExtractionWorkers)
+		// Same rule at startup and periodically: "parsing" rows older than job timeout + grace
+		// go back to "uploaded", then everything "uploaded" is (re)queued.
+		queue.Recover(workerCtx, receiptRepo.ResetStaleParsing, receiptRepo.ListIDsByStatus)
+		queue.StartSweeper(workerCtx, time.Duration(cfg.ExtractionSweepSec)*time.Second,
+			receiptRepo.ResetStaleParsing, receiptRepo.ListIDsByStatus)
+	}
+	uploadHandler := &handlers.UploadHandler{Store: docRepo, Receipts: receiptRepo, Blobs: blobs,
+		MaxBytes: cfg.MaxUploadBytes, Logger: logger}
+	if queue != nil {
+		uploadHandler.Queue = queue
+	}
+
+	handler := router.New(receiptHandler, uploadHandler, logger)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),
 		Handler:      handler,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  60 * time.Second, // photo uploads from phones on slow links
+		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
@@ -114,11 +157,20 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
-		logger.Error("server forced to shutdown", "error", err)
-		os.Exit(1)
+	httpErr := srv.Shutdown(ctx)
+	if httpErr != nil {
+		logger.Error("server forced to shutdown", "error", httpErr)
 	}
 
+	if queue != nil {
+		// stop taking jobs; let in-flight provider calls finish up to EXTRACTION_SHUTDOWN_TIMEOUT
+		if !queue.Shutdown(time.Duration(cfg.ExtractionShutdownSec) * time.Second) {
+			logger.Warn("in-flight extractions cancelled; they will be retried on next start")
+		}
+	}
+	if httpErr != nil {
+		os.Exit(1)
+	}
 	logger.Info("server stopped")
 }
 
