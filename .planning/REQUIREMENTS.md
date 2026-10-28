@@ -29,10 +29,10 @@
 - [x] **UI-07** (phase 3): HEIC/HEIF accepted (magic bytes). Every upload is converted to ONE normalized JPEG (EXIF orientation applied, long edge <= 2000 px, q80, all EXIF/GPS stripped); only the JPEG is stored and used for extraction/UI. Dedupe hash = sha256 of the original bytes. `KEEP_ORIGINAL_UPLOADS` (default false) also keeps the original. HEIC decoded by the libheif CLI (container: libheif-tools). xAI accepts only JPEG/PNG.
 - [x] **ING-09** (phase 3): Extraction captures store number, street, city, state, zip, phone; upserted onto `stores` (city, region, postal_code) by the F6 key and linked; repeats dedupe.
 ### Normalization
-- [ ] **NORM-01**: Line items map to canonical products via merchant-scoped item number / UPC, then alias, then fuzzy/LLM suggestion
-- [ ] **NORM-02**: Unmapped/low-confidence lines appear in the review queue and are fixable
-- [ ] **NORM-04** (phase 4, from phase 3 golden run): the merchant sanity check also flags names that CONTAIN the store city or street (token/substring match on normalized keys), e.g. "Safeway Oakland" or "Target 123 Main St", not only exact matches.
-- [ ] **NORM-03**: When merchants merge and aliases collide on (merchant, item_number), keep the colliding alias with item_number cleared (do not drop it); revisit the 006 backfill behaviour here
+- [x] **NORM-01**: Line items map to canonical products via merchant-scoped item number / UPC, then alias, then fuzzy/LLM suggestion
+- [x] **NORM-02**: Unmapped/low-confidence lines appear in the review queue and are fixable
+- [x] **NORM-04** (phase 4, from phase 3 golden run): the merchant sanity check also flags names that CONTAIN the store city or street (token/substring match on normalized keys), e.g. "Safeway Oakland" or "Target 123 Main St", not only exact matches.
+- [x] **NORM-03**: When merchants merge and aliases collide on (merchant, item_number), keep the colliding alias with item_number cleared (do not drop it); revisit the 006 backfill behaviour here
 ### MCP
 - [ ] **MCP-01**: Streamable HTTP MCP endpoint with read-only tools (search, where-bought, spend, price history)
 - [ ] **MCP-02**: Every answer returns receipt ids/dates so results are verifiable

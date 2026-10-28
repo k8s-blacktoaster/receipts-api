@@ -99,6 +99,31 @@ The API includes a complete Receipts CRUD API:
 | DELETE | `/api/v1/receipts/{id}` | Delete a receipt |
 | POST | `/api/v1/uploads` | Upload a receipt photo (multipart `image`, JPEG/PNG/HEIC, max 20 MiB); 202 + queued extraction, 200 if the same image was already uploaded |
 | POST | `/api/v1/receipts/{id}/extract` | Re-run extraction for a photo receipt; 409 while parsing and always 409 for `reviewed` receipts (no force option in v1) |
+| GET | `/api/v1/products?q=` | Search canonical products by name or any merchant alias (substring or trigram) |
+| POST | `/api/v1/products` | Create a product (`canonical_name` required; `brand`, `category`, `upc`) |
+| GET | `/api/v1/review/items` | Product review queue: unmapped lines (not on uploaded/parsing receipts) with the fuzzy suggestion |
+| POST | `/api/v1/review/items/{id}/map` | Map a line (`{"product_id":N}` or `{"new_product":{...}}`); learns the merchant alias and maps matching unmapped lines; 409 while the receipt is uploaded/parsing |
+
+### Product matching (phase 4)
+
+Every saved line (manual create, edit, or extraction) without a product goes through the matcher,
+scoped to the receipt's merchant:
+
+1. merchant item number (`product_aliases.item_number`) -> `match_source=item_number`
+2. UPC (`products.upc`) -> `upc`
+3. printed text, case-insensitive (`raw_text`, then `name`) against the merchant's aliases -> `exact`
+4. pg_trgm similarity >= 0.4 over the merchant's aliases and all canonical names -> **suggestion
+   only** (`suggested_product_id`, `match_confidence`); the line stays unmapped and appears in the
+   review queue.
+
+Lines that already carry a `product_id` are kept as-is (`manual`). Mapping a line in the review
+queue (API or `/review`) records a manual alias (printed text plus item number) for that merchant,
+maps the merchant's other unmapped lines with the same item number or text, and is reused for every
+later receipt. No LLM is called for matching (the `llm` source is reserved).
+
+Merging merchants (`/merchants`) moves receipts, folds stores with the same number or address,
+and moves aliases: a text collision keeps the target's alias; an item-number collision keeps the
+moved alias with `item_number` cleared (NORM-03; migration 006 applies the same rule).
 
 ### Web UI
 
@@ -117,8 +142,10 @@ otherwise; bodies capped at 1 MiB). There is no chat or bot in the UI.
   edit, Approve (-> reviewed), Re-extract, Delete. While a receipt is `uploaded` or `parsing` the
   page auto-refreshes and edits are disabled; the server refuses them with 409 anyway. Re-extract
   explains its 409s (parsing; reviewed receipts can't be re-extracted in v1).
-- **Merchants** (`/merchants`): rename. The new name is re-normalized; a name that already belongs
-  to another merchant is refused with 409 naming it (no merge in v1).
+- **Review** (`/review`): unmapped lines; accept the suggestion, pick a candidate product, or
+  create a product. The correction becomes a merchant alias used from then on.
+- **Merchants** (`/merchants`): rename and merge. The new name is re-normalized; a name that already
+  belongs to another merchant is refused with 409 naming it, with a button to merge into it.
 
 ### Upload normalization (HEIC)
 

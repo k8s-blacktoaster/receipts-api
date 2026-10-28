@@ -3,7 +3,7 @@
 - [x] **Phase 1: Schema & model hardening** - merchants/stores, line items, products/aliases, members, pipeline status, cents money (merged 2026-10-27, PR #1)
 - [x] **Phase 2: Upload + extraction pipeline** - photo upload, object store, queue, pluggable vision LLM (Grok default), validation
 - [x] **Phase 3: Mobile web UI** - camera capture, multi-photo, upload status, receipt list, review/edit
-- [ ] **Phase 4: Normalization & review** - product matching, alias learning, review endpoints
+- [x] **Phase 4: Normalization & review** - product matching, alias learning, review endpoints
 - [ ] **Phase 5: MCP server** - read-only tools over Streamable HTTP + auth
 - [ ] **Phase 6: Kubernetes deploy & backups** - CNPG, object store, secrets, ingress, restore drill
 
