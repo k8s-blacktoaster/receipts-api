@@ -27,6 +27,8 @@ func Check(r *models.Receipt, e *Extracted, tol int64) []string {
 	var reasons []string
 	if models.NormalizeMerchantName(r.StoreName) == "" {
 		reasons = append(reasons, "missing merchant name")
+	} else if why := merchantLooksLikeLocation(r); why != "" {
+		reasons = append(reasons, "merchant name "+strconvQuote(r.StoreName)+" looks like the store location ("+why+")")
 	}
 	if r.Date == "" {
 		reasons = append(reasons, "missing or invalid purchase date")
@@ -141,3 +143,22 @@ func sharesWord(a, b string) bool {
 	}
 	return false
 }
+
+var storeNumberLike = regexp.MustCompile(`#\s*\d+|(?i)\b(store|branch|location)\s*#?\s*\d+`)
+
+// merchantLooksLikeLocation catches a branch line used as the merchant (generic: compares with
+// the receipt's own store fields, no brand list).
+func merchantLooksLikeLocation(r *models.Receipt) string {
+	key := models.NormalizeMerchantName(r.StoreName)
+	switch {
+	case storeNumberLike.MatchString(r.StoreName):
+		return "contains a store number"
+	case r.StoreCity != "" && key == models.NormalizeMerchantName(r.StoreCity):
+		return "same as the store city"
+	case r.StoreAddress != "" && key == models.NormalizeMerchantName(r.StoreAddress):
+		return "same as the store address"
+	}
+	return ""
+}
+
+func strconvQuote(s string) string { return fmt.Sprintf("%q", s) }

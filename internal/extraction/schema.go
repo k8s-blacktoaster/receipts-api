@@ -7,7 +7,14 @@ const SystemPrompt = `You extract data from photos of retail receipts from any m
 Return only JSON matching the schema. Rules:
 - All money is integer cents (e.g. $12.34 -> 1234). Never use decimals for money.
 - Use null for anything not printed or unreadable; do not guess.
-- merchant_name is the chain/brand as printed (e.g. "Trader Joe's"), not the legal entity.
+- merchant_name is the brand / chain name only, the way a customer would name the store
+  (e.g. "Trader Joe's"), not the legal entity. Drop generic words that describe the business
+  type or legal form when they are printed next to the brand (e.g. "Acme Wholesale" -> "Acme",
+  "Acme Supermarket Inc." -> "Acme"), but keep words that are part of the brand itself.
+  Never use the branch / location line (city, "#123", street, "Store 45") as merchant_name;
+  that belongs in the store_* fields. If the logo is cut off, take the brand from other printed
+  text (header, footer, website, return policy, membership text); null only if no brand
+  appears anywhere on the receipt.
 - Store location, each copied as printed and null if absent: store_number (store/location id,
   e.g. "#0412" -> "0412"), store_address (street line only), store_city, store_state (2-letter
   US state or region code), store_zip, store_phone.

@@ -104,3 +104,37 @@ func TestReconcileNegativeAndDiscountLookingNames(t *testing.T) {
 		t.Fatalf("return flagged: %v", rs)
 	}
 }
+
+// receipt-v4: the branch line must not be used as the merchant (generic; synthetic data).
+func TestMerchantLooksLikeLocation(t *testing.T) {
+	base := func(name string) *models.Receipt {
+		r := &models.Receipt{SubtotalCents: 500, TotalCents: 500, StoreCity: "Springfield", StoreAddress: "1 Test Ave",
+			Items: []models.ReceiptItem{item("WIDGET", 500, 0)}}
+		r.Date = "2026-01-02"
+		r.StoreName = name
+		return r
+	}
+	for name, want := range map[string]string{
+		"SPRINGFIELD #123": "contains a store number", "Springfield": "same as the store city",
+		"1 TEST AVE": "same as the store address", "Store 45": "contains a store number",
+		"Acme": "", "Acme Market": "", "7 Peaks Cafe": "",
+	} {
+		r := base(name)
+		rs := Check(r, &Extracted{SubtotalCents: ptr(500), TotalCents: ptr(500)}, 2)
+		if want == "" && len(rs) != 0 || want != "" && !hasReason(rs, want) {
+			t.Errorf("%q: %v (want %q)", name, rs, want)
+		}
+	}
+}
+
+// The merchant rule in the prompt stays generic: no brand list, location line excluded.
+func TestPromptMerchantRuleIsGeneric(t *testing.T) {
+	for _, want := range []string{"brand / chain name only", "Never use the branch / location line", "If the logo is cut off"} {
+		if !strings.Contains(SystemPrompt, want) {
+			t.Errorf("prompt missing %q", want)
+		}
+	}
+	if strings.Contains(strings.ToLower(SystemPrompt), "costco") || PromptVersion != "receipt-v4" {
+		t.Errorf("prompt must stay merchant-agnostic (version %s)", PromptVersion)
+	}
+}
