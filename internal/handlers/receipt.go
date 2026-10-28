@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"receipts-db/internal/models"
@@ -169,7 +170,9 @@ func (h *ReceiptHandler) CreateReceipt(w http.ResponseWriter, r *http.Request) {
 // It updates an existing receipt
 //
 //	@Summary		Update receipt
-//	@Description	Update an existing receipt's information
+//	@Description	Update an existing receipt's information. Omitting "status" (or sending the current one)
+//	@Description	keeps it; a change must follow the status transition table (e.g. parsed -> reviewed),
+//	@Description	otherwise 409 and the receipt is left unchanged. "parsing" is only set by the extraction worker.
 //	@Tags			receipts
 //	@Accept			json
 //	@Produce		json
@@ -178,6 +181,7 @@ func (h *ReceiptHandler) CreateReceipt(w http.ResponseWriter, r *http.Request) {
 //	@Success		200		{object}	models.SuccessResponse	"Updated receipt"
 //	@Failure		400		{object}	models.ErrorResponse	"Bad request"
 //	@Failure		404		{object}	models.ErrorResponse	"Receipt not found"
+//	@Failure		409		{object}	models.ErrorResponse	"Invalid status transition"
 //	@Failure		500		{object}	models.ErrorResponse	"Internal server error"
 //	@Router			/receipts/{id} [put]
 func (h *ReceiptHandler) UpdateReceipt(w http.ResponseWriter, r *http.Request) {
@@ -209,6 +213,11 @@ func (h *ReceiptHandler) UpdateReceipt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.Update(ctx, &receipt); err != nil {
+		if errors.Is(err, repository.ErrInvalidTransition) {
+			move := strings.Replace(strings.TrimPrefix(err.Error(), repository.ErrInvalidTransition.Error()+": "), " -> ", " to ", 1)
+			h.respondWithError(w, http.StatusConflict, "Invalid status transition from "+move+"; receipt unchanged")
+			return
+		}
 		if errors.Is(err, repository.ErrNotFound) {
 			h.respondWithError(w, http.StatusNotFound, "Receipt not found")
 			return

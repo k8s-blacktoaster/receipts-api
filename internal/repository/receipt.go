@@ -269,12 +269,29 @@ func (r *receiptRepo) GetByID(ctx context.Context, id int) (*models.Receipt, err
 }
 
 func (r *receiptRepo) Update(ctx context.Context, receipt *models.Receipt) error {
+	requested := receipt.Status // "" = keep current status
 	receipt.Normalize()
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
+
+	// Status changes go through the same transition table as SetStatus. The row lock keeps a
+	// concurrent claim/SetStatus from slipping in between the check and the write.
+	var current string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM receipts WHERE id = $1 FOR UPDATE`, receipt.ID).Scan(&current); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("failed to load receipt status: %w", err)
+	}
+	if requested == "" {
+		receipt.Status = current
+	} else if requested != current && (requested == models.StatusParsing || !models.CanTransition(current, requested)) {
+		// entering "parsing" is reserved for ClaimForParsing
+		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, current, requested)
+	}
 
 	if err := resolveMerchantStore(ctx, tx, receipt); err != nil {
 		return err
