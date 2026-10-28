@@ -41,22 +41,25 @@ func TestMerchantInternalWhitespaceAndCasingUpgrade(t *testing.T) {
 	mustExecErr(t, db, "merchants_name_normalized", `INSERT INTO merchants (name) VALUES ('Two  Spaces')`)
 }
 
-// A1/A2 backfill: 006 merges internal-whitespace variants and picks the display name.
+// 006 backfill: display name is chosen among existing receipts.store_name variants.
 func TestMerchantBackfillDisplayName(t *testing.T) {
 	db := testDB(t)
 	migrateTo(t, db, 5)
 	for _, q := range []string{
 		// simulate legacy duplicates that pre-date the unique key
 		`DROP INDEX merchants_name_uniq`,
-		// most common wins: 'Costco' used by 2 receipts beats 'costco' (1) and 'COSTCO  ' (merchant only)
+		// frequency beats casing: COSTCO printed on 2 receipts, Costco on 1
 		`INSERT INTO merchants (id, name) VALUES (801, 'costco'), (802, 'Costco'), (803, 'COSTCO')`,
-		`INSERT INTO receipts (store_name, date, merchant_id) VALUES ('a','2026-01-01',801), ('b','2026-01-01',802), ('c','2026-01-01',802)`,
-		// tie (1 each): cased variant beats all-lowercase even though lowercase has lower id
+		`INSERT INTO receipts (store_name, date, merchant_id) VALUES ('COSTCO','2026-01-01',801), ('COSTCO','2026-01-02',803), ('Costco','2026-01-03',802)`,
+		// tie (1 vote each): mixed case wins over all-lower
 		`INSERT INTO merchants (id, name) VALUES (811, 'trader joes'), (812, 'Trader Joes')`,
-		// internal whitespace variant merges (005 allowed it)
-		`INSERT INTO merchants (id, name) VALUES (821, 'Whole  Foods'), (822, 'whole foods')`,
+		`INSERT INTO receipts (store_name, date, merchant_id) VALUES ('trader joes','2026-01-01',811), ('Trader  Joes','2026-01-02',812)`,
+		// no receipts, no mixed-case variant: keep an existing variant (never invent casing)
+		`INSERT INTO merchants (id, name) VALUES (841, 'whole foods'), (842, 'WHOLE  FOODS')`,
+		// internal-whitespace variant + duplicate store number merges
+		`INSERT INTO merchants (id, name) VALUES (821, 'Sprouts  Market'), (822, 'sprouts market')`,
 		`INSERT INTO stores (id, merchant_id, store_number) VALUES (831, 821, '7'), (832, 822, '7')`,
-		`INSERT INTO receipts (store_name, date, merchant_id, store_id) VALUES ('w','2026-01-01',822,832)`,
+		`INSERT INTO receipts (store_name, date, merchant_id, store_id) VALUES ('Sprouts Market','2026-01-01',822,832)`,
 	} {
 		if _, err := db.Exec(q); err != nil {
 			t.Fatalf("%s: %v", q, err)
@@ -72,13 +75,51 @@ func TestMerchantBackfillDisplayName(t *testing.T) {
 			t.Fatalf("merchant %d = %q (%v), want %q", id, name, err, want)
 		}
 	}
-	check(801, "Costco")
+	check(801, "COSTCO")
 	check(811, "Trader Joes")
-	check(821, "Whole Foods")
+	check(841, "whole foods")
+	check(821, "Sprouts Market")
 	var n, sid int
-	db.QueryRow(`SELECT count(*) FROM merchants WHERE id IN (802,803,812,822)`).Scan(&n)
-	db.QueryRow(`SELECT store_id FROM receipts WHERE store_name = 'w'`).Scan(&sid)
+	db.QueryRow(`SELECT count(*) FROM merchants WHERE id IN (802,803,812,822,842)`).Scan(&n)
+	db.QueryRow(`SELECT store_id FROM receipts WHERE store_name = 'Sprouts Market'`).Scan(&sid)
 	if n != 0 || sid != 831 {
 		t.Fatalf("merge incomplete: leftover=%d store=%d", n, sid)
+	}
+}
+
+// QA repro: legacy 001/002 data with case/whitespace variants -> Costco, Trader Joes.
+func TestQAReproLegacyStoreNameVariants(t *testing.T) {
+	db := testDB(t)
+	migrateTo(t, db, 2)
+	for _, name := range []string{"costco", "Costco", "COSTCO", "trader  joes", "Trader Joes", "TRADER   JOES"} {
+		var id int
+		if err := db.QueryRow(`INSERT INTO receipts (store_name, date, subtotal) VALUES ($1, '2025-01-01', 12.34) RETURNING id`, name).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO receipt_items (receipt_id, sku, name, quantity, unit_price) VALUES ($1, 'X', 'Item', 1, 12.34)`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.RunMigrations(db, "../../migrations"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.Query(`SELECT name FROM merchants ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var n string
+		rows.Scan(&n)
+		got = append(got, n)
+	}
+	if len(got) != 2 || got[0] != "Costco" || got[1] != "Trader Joes" {
+		t.Fatalf("merchants = %q, want [Costco Trader Joes]", got)
+	}
+	var orphans int
+	db.QueryRow(`SELECT count(*) FROM receipts r LEFT JOIN merchants m ON m.id = r.merchant_id WHERE m.id IS NULL`).Scan(&orphans)
+	if orphans != 0 {
+		t.Fatalf("%d receipts lost their merchant", orphans)
 	}
 }

@@ -1,8 +1,7 @@
 -- 006: merchant names collapse internal whitespace ('Trader  Joes' = 'Trader Joes') and merged
 -- duplicates keep a properly cased display name.
 -- Normalized key: lower(regexp_replace(btrim(name), '\s+', ' ', 'g')).
--- Display-name choice per key: most common variant (weighted by referencing receipts, min 1 per
--- merchant row); tie -> a variant containing uppercase letters; tie -> lowest merchant id.
+-- Display name: see _merchant_display below.
 
 DROP INDEX IF EXISTS merchants_name_uniq;
 ALTER TABLE merchants DROP CONSTRAINT IF EXISTS merchants_name_trimmed;
@@ -12,15 +11,25 @@ UPDATE merchants SET name = regexp_replace(btrim(name), '\s+', ' ', 'g')
 CREATE TEMP TABLE _merchant_map ON COMMIT DROP AS
 SELECT id, min(id) OVER (PARTITION BY lower(name)) AS keep_id FROM merchants;
 
+-- Display name per merged group: chosen only among existing variants, i.e. the legacy
+-- receipts.store_name values (whitespace-collapsed, one vote per receipt). Merchant rows'
+-- own names are a zero-vote fallback for merchants with no receipts. Ranking: most votes;
+-- tie -> mixed case (not all-caps, not all-lower); tie -> earliest merchant id; tie -> name.
 CREATE TEMP TABLE _merchant_display ON COMMIT DROP AS
 SELECT DISTINCT ON (keep_id) keep_id, name
 FROM (
-    SELECT mm.keep_id, m.name, m.id,
-           sum(GREATEST((SELECT count(*) FROM receipts r WHERE r.merchant_id = m.id), 1))
-               OVER (PARTITION BY mm.keep_id, m.name) AS uses
-    FROM merchants m JOIN _merchant_map mm ON mm.id = m.id
+    SELECT keep_id, name, sum(votes) AS votes, min(src_id) AS src_id
+    FROM (
+        SELECT mm.keep_id, regexp_replace(btrim(r.store_name), '\s+', ' ', 'g') AS name, 1 AS votes, mm.id AS src_id
+        FROM receipts r JOIN _merchant_map mm ON mm.id = r.merchant_id
+        WHERE r.store_name IS NOT NULL AND btrim(r.store_name) <> ''
+        UNION ALL
+        SELECT mm.keep_id, m.name, 0, m.id
+        FROM merchants m JOIN _merchant_map mm ON mm.id = m.id
+    ) c
+    GROUP BY keep_id, name
 ) v
-ORDER BY keep_id, uses DESC, (name <> lower(name)) DESC, id;
+ORDER BY keep_id, votes DESC, (name <> lower(name) AND name <> upper(name)) DESC, src_id, name;
 
 DELETE FROM _merchant_map WHERE id = keep_id;
 -- receipts on a duplicate store: move store + merchant together (composite FK)
