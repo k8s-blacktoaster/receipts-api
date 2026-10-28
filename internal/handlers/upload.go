@@ -121,7 +121,7 @@ func optionalID(r *http.Request, field string) (*int64, error) {
 //	@Success		200				{object}	models.SuccessResponse{data=models.UploadResult}	"Duplicate image; existing receipt"
 //	@Failure		400				{object}	models.ErrorResponse	"Bad request"
 //	@Failure		413				{object}	models.ErrorResponse	"Image too large"
-//	@Failure		415				{object}	models.ErrorResponse	"Unsupported image type"
+//	@Failure		415				{object}	models.ErrorResponse	"Unsupported image type (HEIC/HEIF gets guidance to use JPEG)"
 //	@Failure		500				{object}	models.ErrorResponse	"Internal server error"
 //	@Router			/uploads [post]
 func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Request) {
@@ -160,12 +160,6 @@ func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Reques
 		h.respond(w, http.StatusBadRequest, "Empty image", nil)
 		return
 	}
-	mime := http.DetectContentType(data)
-	ext, ok := allowedImageTypes[mime]
-	if !ok {
-		h.respond(w, http.StatusUnsupportedMediaType, "Unsupported image type (use JPEG or PNG)", nil)
-		return
-	}
 	uploader, err := optionalID(r, "uploaded_by_id")
 	if err != nil {
 		h.respond(w, http.StatusBadRequest, err.Error(), nil)
@@ -176,9 +170,39 @@ func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Reques
 		h.respond(w, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
+	res, code, msg := h.Ingest(ctx, data, uploader, member)
+	h.respond(w, code, msg, res)
+}
+
+// HEICGuidance is the 415 message for HEIC/HEIF photos (iPhone default format).
+const HEICGuidance = "HEIC/HEIF photos are not supported. Upload from the web page (Safari converts to JPEG), " +
+	"or set iPhone Settings > Camera > Formats > Most Compatible, or export the photo as JPEG."
+
+// isHEIC detects ISO-BMFF HEIF containers (ftyp box with a HEIC/HEIF brand).
+func isHEIC(b []byte) bool {
+	if len(b) < 12 || string(b[4:8]) != "ftyp" {
+		return false
+	}
+	switch string(b[8:12]) {
+	case "heic", "heix", "hevc", "hevx", "heim", "heis", "mif1", "msf1", "avif":
+		return true
+	}
+	return false
+}
+
+// Ingest validates and stores one photo and creates its receipt (shared by the JSON API and
+// the web UI). It returns the result (nil on error), an HTTP status and a message.
+func (h *UploadHandler) Ingest(ctx context.Context, data []byte, uploader, member *int64) (*models.UploadResult, int, string) {
+	mime := http.DetectContentType(data)
+	if isHEIC(data) {
+		return nil, http.StatusUnsupportedMediaType, HEICGuidance
+	}
+	ext, ok := allowedImageTypes[mime]
+	if !ok {
+		return nil, http.StatusUnsupportedMediaType, "Unsupported image type (use JPEG or PNG)"
+	}
 	if err := validateImage(data); err != nil {
-		h.respond(w, http.StatusBadRequest, err.Error(), nil)
-		return
+		return nil, http.StatusBadRequest, err.Error()
 	}
 	// validate references before writing anything to disk
 	for _, ref := range []struct {
@@ -191,24 +215,19 @@ func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Reques
 		ok, err := h.Store.MemberExists(ctx, *ref.id)
 		if err != nil {
 			h.Logger.Error("member lookup failed", "error", err)
-			h.respond(w, http.StatusInternalServerError, "Failed to store upload", nil)
-			return
+			return nil, http.StatusInternalServerError, "Failed to store upload"
 		}
 		if !ok {
-			h.respond(w, http.StatusBadRequest, "Unknown "+ref.field, nil)
-			return
+			return nil, http.StatusBadRequest, "Unknown " + ref.field
 		}
 	}
 
 	sum := sha256.Sum256(data)
 	if rid, did, status, found, err := h.Store.FindReceiptBySHA(ctx, sum[:]); err != nil {
 		h.Logger.Error("upload lookup failed", "error", err)
-		h.respond(w, http.StatusInternalServerError, "Failed to store upload", nil)
-		return
+		return nil, http.StatusInternalServerError, "Failed to store upload"
 	} else if found {
-		h.respond(w, http.StatusOK, "Duplicate image; existing receipt returned",
-			models.UploadResult{ReceiptID: rid, SourceDocumentID: did, Status: status, Duplicate: true})
-		return
+		return &models.UploadResult{ReceiptID: rid, SourceDocumentID: did, Status: status, Duplicate: true}, http.StatusOK, "Duplicate image; existing receipt returned"
 	}
 
 	hexSum := hex.EncodeToString(sum[:])
@@ -216,17 +235,14 @@ func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Reques
 	created, err := h.Blobs.Put(ctx, key, data)
 	if err != nil {
 		h.Logger.Error("blob put failed", "error", err)
-		h.respond(w, http.StatusInternalServerError, "Failed to store upload", nil)
-		return
+		return nil, http.StatusInternalServerError, "Failed to store upload"
 	}
 	doc := &models.SourceDocument{Kind: "photo", ObjectKey: key, SHA256: sum[:], MimeType: mime, UploadedByID: uploader}
 	rc := &models.Receipt{Source: models.SourcePhoto, Status: models.StatusUploaded, UploadedByID: uploader, MemberID: member}
 	if err := h.Store.CreateUpload(ctx, doc, rc); err != nil {
 		// a concurrent identical upload may have won the unique sha256 race
 		if rid, did, status, found, e := h.Store.FindReceiptBySHA(ctx, sum[:]); e == nil && found {
-			h.respond(w, http.StatusOK, "Duplicate image; existing receipt returned",
-				models.UploadResult{ReceiptID: rid, SourceDocumentID: did, Status: status, Duplicate: true})
-			return
+			return &models.UploadResult{ReceiptID: rid, SourceDocumentID: did, Status: status, Duplicate: true}, http.StatusOK, "Duplicate image; existing receipt returned"
 		}
 		// Remove the file only if this request created it; an existing blob (same sha256)
 		// may belong to another, successful upload.
@@ -236,8 +252,7 @@ func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Reques
 			}
 		}
 		h.Logger.Error("create upload failed", "error", err)
-		h.respond(w, http.StatusInternalServerError, "Failed to store upload", nil)
-		return
+		return nil, http.StatusInternalServerError, "Failed to store upload"
 	}
 	msg := "Upload accepted; extraction disabled (stays uploaded until a provider is configured)"
 	if h.Queue != nil {
@@ -245,8 +260,7 @@ func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Reques
 		msg = "Upload accepted; extraction queued"
 	}
 	h.Logger.Info("receipt photo uploaded", "receipt_id", rc.ID, "source_document_id", doc.ID, "bytes", len(data))
-	h.respond(w, http.StatusAccepted, msg,
-		models.UploadResult{ReceiptID: rc.ID, SourceDocumentID: doc.ID, Status: rc.Status})
+	return &models.UploadResult{ReceiptID: rc.ID, SourceDocumentID: doc.ID, Status: rc.Status}, http.StatusAccepted, msg
 }
 
 // ReextractReceipt handles POST /api/v1/receipts/{id}/extract

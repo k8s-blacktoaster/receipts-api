@@ -320,3 +320,20 @@ func TestUploadCleansUpBlobOnDBError(t *testing.T) {
 		t.Fatal("deleted a blob this request did not create")
 	}
 }
+
+func TestUploadHEICGets415WithGuidance(t *testing.T) {
+	heic := append([]byte{0, 0, 0, 0x18}, []byte("ftypheic\x00\x00\x00\x00mif1heic")...)
+	heic = append(heic, make([]byte, 64)...)
+	h, st, _, blobs := newUploadHandler()
+	body, ct := multipartBody(t, "image", heic, nil)
+	rec := do(h.UploadReceiptPhoto, body, ct)
+	if rec.Code != 415 || !strings.Contains(rec.Body.String(), "Most Compatible") {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if len(blobs.M) != 0 || len(st.docs) != 0 {
+		t.Fatal("HEIC stored")
+	}
+	if isHEIC(pngBytes(t, 1)) {
+		t.Fatal("png detected as heic")
+	}
+}
