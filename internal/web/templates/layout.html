@@ -10,7 +10,7 @@
 <body>
 <header class="top">
   <a class="brand" href="/receipts">Receipts</a>
-  <nav><a href="/receipts">List</a> <a href="/merchants">Merchants</a>
+  <nav><a href="/receipts">List</a> {{if .HasReview}}<a href="/review">Review</a> {{end}}<a href="/merchants">Merchants</a>
   <a class="who" href="/member?next=/receipts">{{if .Member}}{{.Member.DisplayName}}{{else}}Pick member{{end}}</a></nav>
 </header>
 <main>

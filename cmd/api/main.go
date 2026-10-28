@@ -148,7 +148,7 @@ func main() {
 	}
 
 	ui, err := web.New(web.UI{Receipts: receiptRepo, Members: repository.NewMemberRepository(db),
-		Merchants: repository.NewMerchantRepository(db), Docs: docRepo, Blobs: blobs, Uploads: uploadHandler,
+		Merchants: repository.NewMerchantRepository(db), Products: repository.NewProductRepository(db), Docs: docRepo, Blobs: blobs, Uploads: uploadHandler,
 		MaxBytes: cfg.MaxUploadBytes, Logger: logger})
 	if err != nil {
 		logger.Error("web UI templates", "error", err)
