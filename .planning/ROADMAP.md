@@ -54,6 +54,17 @@ assets embedded in the Go binary (`embed`), served by the same deployment, VPN-o
 **Depends on**: Phase 2 (can run in parallel with 3-5)
 **Requirements**: OPS-01, OPS-02
 
+### Phase 7: Legacy column cleanup (later)
+**Depends on**: Phases 2-4 (all readers on merchant_id/store_id)
+**Scope**: drop legacy receipts.store_* columns (store_name/category/address/phone as stored
+columns) once every reader uses merchants/stores; paired down migration restores them.
+
+## Decisions (2026-10-27, Jack via CoS)
+- Rolling back 004 collapses status to review_state ('auto'/'needs_review'/'reviewed'); accepted, documented in 004 down.
+- Case-insensitive merchant matching/merging (e.g. in store_spending_view) is intended.
+- Legacy store_* columns kept for now; cleanup is Phase 7.
+- members FKs (member_id, uploaded_by_id, reviewed_by_id) stay nullable.
+
 ## Future ideas (not planned)
 - Store-account imports (e.g. Costco online receipts) via a generic import path. Unofficial
   APIs / ToS risk would need review first.

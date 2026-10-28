@@ -1,4 +1,6 @@
 -- Reverse of 004. uploaded/parsing/parsed/failed collapse to 'auto' (003 had no finer states).
+-- ACCEPTED (Jack, 2026-10-27): this rollback is lossy; uploaded/parsing/parsed/failed and
+-- parse timestamps/errors are not recoverable after down + up.
 ALTER TABLE receipt_items DROP COLUMN edited_at;
 
 DROP INDEX IF EXISTS idx_receipts_status;
