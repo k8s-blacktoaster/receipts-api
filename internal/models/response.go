@@ -18,7 +18,6 @@ type ErrorResponse struct {
 	BaseResponse
 }
 
-
 type PaginatedResponse struct {
 	BaseResponse
 	Data       interface{}     `json:"data,omitempty"`

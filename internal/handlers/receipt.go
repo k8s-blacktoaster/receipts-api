@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -113,7 +113,7 @@ func (h *ReceiptHandler) GetReceipt(w http.ResponseWriter, r *http.Request) {
 
 	receipt, err := h.repo.GetByID(ctx, id)
 	if err != nil {
-		if err.Error() == "receipt not found" {
+		if errors.Is(err, repository.ErrNotFound) {
 			h.respondWithError(w, http.StatusNotFound, "Receipt not found")
 			return
 		}
@@ -149,36 +149,9 @@ func (h *ReceiptHandler) CreateReceipt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate required fields
-	if receipt.StoreName == "" {
-		h.respondWithError(w, http.StatusBadRequest, "Store name is required")
+	if err := receipt.Validate(); err != nil {
+		h.respondWithError(w, http.StatusBadRequest, err.Error())
 		return
-	}
-
-	if receipt.Date == "" {
-		h.respondWithError(w, http.StatusBadRequest, "Date is required")
-		return
-	}
-
-	if receipt.Subtotal < 0 {
-		h.respondWithError(w, http.StatusBadRequest, "Subtotal cannot be negative")
-		return
-	}
-
-	// Validate items
-	for i, item := range receipt.Items {
-		if item.Name == "" {
-			h.respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Item name is required for item %d", i+1))
-			return
-		}
-		if item.Quantity <= 0 {
-			h.respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Item quantity must be positive for item %d", i+1))
-			return
-		}
-		if item.UnitPrice < 0 {
-			h.respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Item unit price cannot be negative for item %d", i+1))
-			return
-		}
 	}
 
 	if err := h.repo.Create(ctx, &receipt); err != nil {
@@ -230,24 +203,13 @@ func (h *ReceiptHandler) UpdateReceipt(w http.ResponseWriter, r *http.Request) {
 
 	receipt.ID = id
 
-	// Validate required fields
-	if receipt.StoreName == "" {
-		h.respondWithError(w, http.StatusBadRequest, "Store name is required")
-		return
-	}
-
-	if receipt.Date == "" {
-		h.respondWithError(w, http.StatusBadRequest, "Date is required")
-		return
-	}
-
-	if receipt.Subtotal < 0 {
-		h.respondWithError(w, http.StatusBadRequest, "Subtotal cannot be negative")
+	if err := receipt.Validate(); err != nil {
+		h.respondWithError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if err := h.repo.Update(ctx, &receipt); err != nil {
-		if err.Error() == "receipt not found" {
+		if errors.Is(err, repository.ErrNotFound) {
 			h.respondWithError(w, http.StatusNotFound, "Receipt not found")
 			return
 		}
@@ -291,7 +253,7 @@ func (h *ReceiptHandler) DeleteReceipt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.Delete(ctx, id); err != nil {
-		if err.Error() == "receipt not found" {
+		if errors.Is(err, repository.ErrNotFound) {
 			h.respondWithError(w, http.StatusNotFound, "Receipt not found")
 			return
 		}
