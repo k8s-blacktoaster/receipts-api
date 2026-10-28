@@ -38,3 +38,12 @@
 - Store-account / connector imports (see ROADMAP "Future ideas")
 - Bank/card transaction import, multi-tenant SaaS, write tools in MCP
 - Merchant-specific schema or code
+
+## Integrity notes (QA phase-1 follow-up, migration 005)
+- Money sign convention: receipts.savings_cents and receipt_items.discount_cents are positive
+  magnitudes (>= 0). receipt_adjustments.amount_cents is signed: instant_savings/coupon/discount
+  <= 0, deposit/fee/tip >= 0, other either. Totals and line amounts >= 0 (returns may be negative).
+- There is deliberately NO DB constraint that subtotal + tax - savings = total. Phase 2 validation
+  (ING) must compare printed vs computed totals and set status = needs_review on mismatch.
+- A receipt's store must belong to its merchant (composite FK). Merchants are unique on
+  lower(btrim(name)); stores without a number are unique on (merchant_id, lower(address)).

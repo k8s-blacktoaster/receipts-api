@@ -32,3 +32,15 @@
 - Integer cents instead of NUMERIC; store/alias keyed by merchant_id (not chain text).
 - No ingest_jobs (phase 2) and no pg_trgm (phase 4).
 - source_documents.kind values generic (photo/email/pdf/import/manual).
+
+## QA follow-up (2026-10-27)
+| Finding | Fix | Test |
+|---|---|---|
+| F1 whitespace merchant dupes | 005: trim + merge, unique lower(btrim(name)), trimmed CHECK; repo trims | TestF1MerchantDedupeTrimmed, TestF1F6BackfillMerges |
+| F2 money sanity | 005: >=0 CHECKs, adjustment sign CHECK; no total-equation constraint (phase 2 needs_review) | TestF2MoneyChecks |
+| F3 store/merchant mismatch | 005: UNIQUE(stores.id, merchant_id) + composite FK | TestF3StoreBelongsToMerchant |
+| F4 FK indexes | 005: 5 partial indexes | TestF4FKIndexes |
+| F5 up ignores -steps | RunMigrationsN; `migrate up -steps N` | TestF5UpSteps |
+| F6 store dupes | 005: unique (merchant_id, lower(address)) where no number; repo upsert | TestF6StoreUpsertByAddress, TestF1F6BackfillMerges |
+| F7 legacy store_* | store_name nullable; receipt_details_view/recent_purchases_view read merchants/stores | TestF7ViewsUseMerchantStore |
+005 down is lossy for merged merchants/stores (not un-merged). pg_dump -s identical after down 1 / up.
