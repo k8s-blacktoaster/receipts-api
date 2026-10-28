@@ -106,7 +106,9 @@ The API includes a complete Receipts CRUD API:
 server-rendered `html/template` plus a little vanilla JS, and it works without JS). It is meant
 for the VPN only: there is no login, just a member picker stored in the `receipts_member`
 cookie (HttpOnly, SameSite=Lax). Cross-site POSTs are rejected (403, Origin / Sec-Fetch-Site
-check). There is no chat or bot in the UI.
+check; `Origin: null` and `Sec-Fetch-Site: same-site` are refused too). The same guard covers
+every write under `/api/v1`, and JSON endpoints require `Content-Type: application/json` (415
+otherwise; bodies capped at 1 MiB). There is no chat or bot in the UI.
 
 - **Receipts** (`/receipts`): camera button (`capture=environment`) and library picker
   (`accept="image/*,.heic,.heif"`), list with status badges (uploaded, parsing, parsed,
@@ -178,8 +180,17 @@ Rolling back migration 007 deletes receipts that were never parsed but leaves th
 in `UPLOAD_DIR` (orphaned; remove by hand).
 
 The extraction provider is chosen with `EXTRACTION_PROVIDER` (`xai` default, `anthropic` stub,
-`none`). The xAI provider calls the Grok vision model (`EXTRACTION_MODEL`, default `grok-4.20`)
-with a strict JSON schema.
+`none`). The xAI provider calls the Grok vision model (`EXTRACTION_MODEL`, default `grok-4.7`)
+with a strict JSON schema and prompt `receipt-v3`. `EXTRACTION_REASONING_EFFORT` (default `low`;
+`none|low|medium|high|xhigh`) is sent as `reasoning_effort` only to models that accept it
+(grok-4.3, 4.5, 4.6, 4.7; not grok-4.20). `EXTRACTION_TIMEOUT_SECONDS` defaults to 300.
+
+Besides the header totals, the review check reconciles line items: sum(line totals) -
+sum(item discounts) + adjustments must equal the subtotal within `EXTRACTION_TOLERANCE_CENTS`
+(a pre-discount subtotal is accepted when the total reflects the discounts). Items with a
+negative price (not returns), discount-looking names (SAVINGS/DISCOUNT/COUPON, a trailing
+"3.00-" amount, "/ 12345" references), a deposit/fee counted both as item and adjustment, or a
+savings amount equal to an item price put the receipt in `needs_review` with a reason.
 
 **API key:** `XAI_API_KEY` is read only from the environment. Never commit it. In Kubernetes:
 
@@ -290,7 +301,9 @@ UPLOAD_DIR=data/uploads
 KEEP_ORIGINAL_UPLOADS=false  # also store the original upload next to the normalized JPEG
 HEIC_DECODER=             # default: search heif-dec, heif-convert, sips (macOS)
 EXTRACTION_PROVIDER=xai   # xai | anthropic | none
-EXTRACTION_MODEL=         # default grok-4.20
+EXTRACTION_MODEL=         # default grok-4.7
+EXTRACTION_REASONING_EFFORT=low  # none|low|medium|high|xhigh; only sent if the model supports it
+EXTRACTION_TIMEOUT_SECONDS=300
 XAI_API_KEY=              # never commit
 EXTRACTION_SHUTDOWN_TIMEOUT=25  # seconds SIGTERM waits for in-flight extractions
 EXTRACTION_STALE_SWEEP_INTERVAL=60  # seconds between stale-parsing sweeps (0 = off)

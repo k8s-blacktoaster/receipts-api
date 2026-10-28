@@ -41,7 +41,35 @@ a process spawn per HEIC upload (tens of ms), fine for a household app.
 - Local smoke (EXTRACTION_PROVIDER=none, throwaway DB, temp UPLOAD_DIR): pages 200, HEIC upload
   202 -> stored `.jpg`, duplicate 200, UI edit while uploaded 409 with message, cross-site 403.
 
+## Extraction fixes + model choice (after the live golden run)
+- Prompt `receipt-v3` (generic): discount/instant-savings lines referencing an item go into
+  that item's discount_cents (never their own item); line_total is the pre-discount price;
+  deposits/fees exactly once; savings only from a printed savings line; each priced line once.
+- Checker: item-level reconciliation (lines - discounts + adjustments vs subtotal), negative
+  prices, discount-looking names, deposit counted twice, savings copied from an item.
+- `EXTRACTION_TIMEOUT_SECONDS` default 300; `EXTRACTION_REASONING_EFFORT` (default low) sent
+  only to models that support it. Default model now `grok-4.7` (+ low effort).
+- Live comparison (receipt-v3, 3 receipts, 12 calls, ground truth = manual reading of the
+  photos, all three reconcile to the printed subtotal; local-only, not committed):
+
+  | model / effort | items correct (of 62) | headers | latency | cost (3 receipts) | checker |
+  |---|---|---|---|---|---|
+  | grok-4.7 / low | 62 | all except merchant name variant | 21-55 s | ~$0.10 | right (R2 had name false positives, fixed) |
+  | grok-4.3 / low | 52 (+1 name truncated) | OK | 28-34 s | ~$0.04 | flagged R2, R3 correctly |
+  | grok-4.20 non-reasoning | 43 | OK | 13-15 s | ~$0.03 | flagged all 3 correctly |
+  | grok-4.20 (reasoning) | 22 of 39 (R3 timed out at 300 s) | R2 date/savings wrong | 2m16-5m | ~$0.09+ | missed R2 (prices shifted one row; sums still reconcile) |
+
+## QA fixes (PR #3 review)
+- M1 CSRF: shared `httpguard`; JSON API requires application/json (415, 1 MiB cap); SameOrigin
+  on all `/api/v1` writes including upload and extract; Origin null / same-site refused.
+- M2 memory: decode budget by bit depth (200 MiB), HEIC size from `ispe` before decoding (and
+  decoder output re-checked), max 2 concurrent normalizations.
+- Minors: money/quantity bounds (NaN/Inf/1e308/int64 max/negative total -> 400), text length
+  limits, approve of an incomplete receipt -> 400, strict local `next`, blank item name -> 400
+  (explicit Remove checkbox).
+
 ## Open / deferred
-- Live golden check not run: xAI rejected the local `.env` key. Rerun once the key is fixed.
+- A misaligned price column (each price shifted one row) still reconciles; only a model-side fix
+  or per-line checks (qty x unit = line) can catch it.
 - HEIC from a real iPhone/Safari not tested on a device (iOS usually transcodes to JPEG anyway).
 - Merchant merge (phase 4), multi-photo receipts (later phase).
