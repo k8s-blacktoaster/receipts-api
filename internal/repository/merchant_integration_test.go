@@ -66,3 +66,44 @@ func TestMerchantRename(t *testing.T) {
 		t.Fatalf("relink: %d", g.MerchantID)
 	}
 }
+
+// Updating a receipt re-inserts items; adjustments tied to an item follow it (or detach if the
+// item was removed) instead of failing on a dangling FK.
+func TestUpdateRemapsAdjustmentItem(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	repo := NewReceiptRepository(db)
+	rc := &models.Receipt{StoreName: "Sprouts", Date: "2026-10-01", Items: []models.ReceiptItem{
+		{Name: "Milk", Quantity: 1, UnitPriceCents: 399}, {Name: "Eggs", Quantity: 1, UnitPriceCents: 499}}}
+	if err := repo.Create(ctx, rc); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := repo.GetByID(ctx, rc.ID)
+	eggs := got.Items[1].ID
+	got.Adjustments = []models.ReceiptAdjustment{{Kind: "coupon", AmountCents: -100, AppliesToID: &eggs}, {Kind: "coupon", AmountCents: -50, AppliesToID: &got.Items[0].ID}}
+	got.Status = ""
+	if err := repo.Update(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = repo.GetByID(ctx, rc.ID)
+	got.Status = ""
+	got.Items = got.Items[1:] // remove Milk
+	if err := repo.Update(ctx, got); err != nil {
+		t.Fatalf("update with remapped adjustments: %v", err)
+	}
+	got, _ = repo.GetByID(ctx, rc.ID)
+	if len(got.Adjustments) != 2 {
+		t.Fatalf("adjustments: %+v", got.Adjustments)
+	}
+	var attached, detached int
+	for _, a := range got.Adjustments {
+		if a.AppliesToID != nil && *a.AppliesToID == got.Items[0].ID {
+			attached++
+		} else if a.AppliesToID == nil {
+			detached++
+		}
+	}
+	if attached != 1 || detached != 1 {
+		t.Fatalf("attached=%d detached=%d %+v", attached, detached, got.Adjustments)
+	}
+}

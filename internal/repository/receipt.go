@@ -125,8 +125,11 @@ func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt, keep
 }
 
 func insertChildren(ctx context.Context, q txExec, r *models.Receipt, now time.Time) error {
+	// Items are re-inserted on update, so remember old ids to re-point adjustments.
+	remap := map[int]int{}
 	for i := range r.Items {
 		it := &r.Items[i]
+		oldID := it.ID
 		it.ReceiptID = r.ID
 		it.CreatedAt, it.UpdatedAt = now, now
 		err := q.QueryRowContext(ctx, `
@@ -144,10 +147,20 @@ func insertChildren(ctx context.Context, q txExec, r *models.Receipt, now time.T
 		if err != nil {
 			return fmt.Errorf("failed to create receipt item: %w", err)
 		}
+		if oldID != 0 {
+			remap[oldID] = it.ID
+		}
 	}
 	for i := range r.Adjustments {
 		a := &r.Adjustments[i]
 		a.ReceiptID = r.ID
+		if a.AppliesToID != nil {
+			if nid, ok := remap[*a.AppliesToID]; ok {
+				a.AppliesToID = &nid
+			} else {
+				a.AppliesToID = nil // its item was removed in this edit; keep the adjustment unattached
+			}
+		}
 		if err := q.QueryRowContext(ctx, `
 			INSERT INTO receipt_adjustments (receipt_id, applies_to_item_id, kind, raw_text, amount_cents)
 			VALUES ($1,$2,$3,$4,$5) RETURNING id`,
