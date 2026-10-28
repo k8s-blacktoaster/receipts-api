@@ -241,6 +241,37 @@ env:
 Without a key the API still accepts uploads; they stay `uploaded` until a provider is configured
 (they are re-queued on startup).
 
+### MCP server (phase 5)
+Read-only [Model Context Protocol](https://modelcontextprotocol.io) tools over Streamable HTTP at
+`POST /mcp` on the same server (JSON responses, stateless, no SSE; `GET /mcp` is 405).
+
+- **Auth:** `Authorization: Bearer $MCP_TOKEN`. `MCP_TOKEN` (>= 32 chars, e.g. `openssl rand -hex 32`)
+  is read from the environment; when it is unset the endpoint is not mounted. Requests with an
+  `Origin` header from another host get 403. Keep it VPN-only like the rest of the app.
+- **Data:** only receipts with status `parsed`, `needs_review` or `reviewed`. Money is integer cents.
+  Every answer carries receipt ids and dates.
+- **Merchant names** are normalized with `NormalizeMerchantName` ("Trader Joe's" -> `trader_joes`);
+  merged-away names follow redirects; no exact match returns an error with pg_trgm candidates.
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `list_merchants` | - | name, receipt_count, total_spent_cents, last_visit, last_receipt_id |
+| `search_products` | `query`, `limit` | products + last purchase (receipt id/date) |
+| `search_purchases` | `query`, `merchant`, `from`, `to`, `limit` | matching line items, newest first |
+| `where_bought` | `product_id`, `limit` | locations (merchant/store, last date/price, receipt ids) + purchases |
+| `spend` | `merchant`, `from`, `to`, `group_by` (merchant/month) | totals per group with receipt ids |
+| `price_history` | `product_id`, `merchant`, `limit` | unit price per purchase, oldest first |
+
+Try it:
+```bash
+export MCP_TOKEN=$(openssl rand -hex 32)   # start the API with the same MCP_TOKEN
+curl -s localhost:8080/mcp -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"spend","arguments":{"merchant":"Trader Joe'"'"'s","group_by":"month"}}}'
+```
+MCP clients (Claude Desktop, Cursor, etc.): add a remote/"streamable-http" server with URL
+`https://<host>/mcp` and header `Authorization: Bearer <token>`.
+
 ### Example Receipt JSON:
 ```json
 {
