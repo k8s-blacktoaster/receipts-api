@@ -17,10 +17,11 @@ var (
 	secrets []string
 
 	patterns = []*regexp.Regexp{
-		// Authorization: Bearer xyz / "authorization":"Basic xyz" / authorization=xyz
-		regexp.MustCompile(`(?i)(authorization["']?\s*[:=]\s*["']?)(?:(?:bearer|basic|token)\s+)?[^\s"',;}]+`),
-		// bare "Bearer xyz"
-		regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+`),
+		// Authorization: Bearer xyz / "authorization":"Basic xyz" / authorization=xyz.
+		// The field name is kept; scheme and value become exactly one Mask.
+		regexp.MustCompile(`(?i)(authorization["']?\s*[:=]\s*["']?)(?:(?:bearer|basic|token)\s+)?(?:\[REDACTED\]|[^\s"',;}]+)`),
+		// bare "Bearer xyz" (scheme included, so output never reads "Bearer [REDACTED]")
+		regexp.MustCompile(`(?i)()\bbearer\s+(?:\[REDACTED\]|[A-Za-z0-9._~+/=-]+)`),
 		// xAI / OpenAI / Anthropic style keys
 		regexp.MustCompile(`()\b(?:xai|sk|sk-ant)-[A-Za-z0-9_-]{8,}`),
 	}
@@ -43,7 +44,7 @@ func Register(secret string) {
 	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
 }
 
-// String returns s with registered secrets, extra secrets and credential patterns masked.
+// String returns s with every credential replaced by exactly one Mask ("[REDACTED]"): registered secrets, extra secrets and credential patterns masked.
 func String(s string, extra ...string) string {
 	mu.RLock()
 	all := append(append([]string(nil), secrets...), extra...)
