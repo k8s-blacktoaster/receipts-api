@@ -1,0 +1,27 @@
+{
+  "merchant_name": "Sprouts Farmers Market",
+  "store_number": "0412",
+  "store_address": "27769 Santa Margarita Parkway, Mission Viejo, CA 92691",
+  "store_phone": "(949) 582-3003",
+  "purchase_date": "2025-08-10",
+  "purchase_time": "17:42",
+  "currency": "usd",
+  "subtotal_cents": 2165,
+  "tax_cents": 98,
+  "total_cents": 1963,
+  "savings_cents": 300,
+  "payment_method": "visa",
+  "payment_last4": "1234",
+  "confidence": 0.93,
+  "items": [
+    {"line_no": 1, "raw_text": "ORG FUJI APPLES", "name": "Organic Fuji Apples", "sku": null, "item_number": "4129", "upc": null,
+     "quantity": 1.52, "unit": "lb", "unit_price_cents": 299, "line_total_cents": 454, "discount_cents": null, "tax_flag": null, "is_return": false},
+    {"line_no": 2, "raw_text": "ORG 2% RF MILK", "name": "Organic 2% Milk", "sku": "SPR-MILK2", "item_number": null, "upc": "0071260002015",
+     "quantity": 1, "unit": null, "unit_price_cents": 699, "line_total_cents": 699, "discount_cents": -100, "tax_flag": null, "is_return": false},
+    {"line_no": 3, "raw_text": "SHAMPOO", "name": "Moisture Shampoo", "sku": null, "item_number": null, "upc": null,
+     "quantity": 1, "unit": null, "unit_price_cents": 1012, "line_total_cents": 1012, "discount_cents": null, "tax_flag": "T", "is_return": false}
+  ],
+  "adjustments": [
+    {"kind": "coupon", "raw_text": "DIGITAL COUPON", "amount_cents": 200}
+  ]
+}

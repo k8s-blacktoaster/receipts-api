@@ -1,0 +1,9 @@
+{
+  "merchant_name": "Corner Market", "store_number": null, "store_address": null, "store_phone": null,
+  "purchase_date": "2025-09-01", "purchase_time": null, "currency": "USD",
+  "subtotal_cents": 1000, "tax_cents": 80, "total_cents": 1500, "savings_cents": 0,
+  "payment_method": null, "payment_last4": null, "confidence": 0.4,
+  "items": [{"line_no": 1, "raw_text": "BREAD", "name": "Bread", "sku": null, "item_number": null, "upc": null,
+    "quantity": 1, "unit": null, "unit_price_cents": 1000, "line_total_cents": 1000, "discount_cents": null, "tax_flag": null, "is_return": false}],
+  "adjustments": []
+}
