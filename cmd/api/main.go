@@ -108,6 +108,9 @@ func main() {
 	workerCtx, stopWorkers := context.WithCancel(context.Background())
 	defer stopWorkers()
 	var queue *extraction.Queue
+	if provider == nil && err == nil {
+		logger.Warn("extraction disabled", "reason", "EXTRACTION_PROVIDER=none")
+	}
 	if provider != nil {
 		logger.Info("extraction enabled", "provider", provider.Name(), "model", provider.Model())
 		pipeline := &extraction.Pipeline{Receipts: receiptRepo, Docs: docRepo, Blobs: blobs, Provider: provider,

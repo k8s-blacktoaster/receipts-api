@@ -167,11 +167,13 @@ func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Reques
 		h.respond(w, http.StatusInternalServerError, "Failed to store upload", nil)
 		return
 	}
+	msg := "Upload accepted; extraction disabled (stays uploaded until a provider is configured)"
 	if h.Queue != nil {
 		h.Queue.Enqueue(rc.ID)
+		msg = "Upload accepted; extraction queued"
 	}
 	h.Logger.Info("receipt photo uploaded", "receipt_id", rc.ID, "source_document_id", doc.ID, "bytes", len(data))
-	h.respond(w, http.StatusAccepted, "Upload accepted; extraction queued",
+	h.respond(w, http.StatusAccepted, msg,
 		models.UploadResult{ReceiptID: rc.ID, SourceDocumentID: doc.ID, Status: rc.Status})
 }
 
