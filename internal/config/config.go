@@ -29,7 +29,9 @@ type Config struct {
 	XAIBaseURL           string
 	ExtractionTimeoutSec int
 	// ExtractionShutdownSec is how long SIGTERM waits for in-flight extractions.
-	ExtractionShutdownSec    int
+	ExtractionShutdownSec int
+	// ExtractionSweepSec is how often abandoned "parsing" rows are reset and requeued (0 = off).
+	ExtractionSweepSec       int
 	ExtractionWorkers        int
 	ExtractionToleranceCents int64
 }
@@ -56,6 +58,7 @@ func Load() (*Config, error) {
 		XAIBaseURL:               getEnv("XAI_BASE_URL", "https://api.x.ai/v1"),
 		ExtractionTimeoutSec:     getEnvAsInt("EXTRACTION_TIMEOUT_SECONDS", 120),
 		ExtractionShutdownSec:    getEnvAsInt("EXTRACTION_SHUTDOWN_TIMEOUT", 25),
+		ExtractionSweepSec:       getEnvAsInt("EXTRACTION_STALE_SWEEP_INTERVAL", 60),
 		ExtractionWorkers:        getEnvAsInt("EXTRACTION_WORKERS", 2),
 		ExtractionToleranceCents: int64(getEnvAsInt("EXTRACTION_TOLERANCE_CENTS", 2)),
 	}

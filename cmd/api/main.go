@@ -118,14 +118,11 @@ func main() {
 			ToleranceCents: cfg.ExtractionToleranceCents, Logger: logger}
 		queue = extraction.NewQueue(pipeline, 100, time.Duration(cfg.ExtractionTimeoutSec+30)*time.Second, logger)
 		queue.Start(workerCtx, cfg.ExtractionWorkers)
-		// Receipts left "parsing" by a previous process (crash or shutdown timeout) go back to
-		// "uploaded" once older than the job timeout, then everything "uploaded" is requeued.
-		if n, err := receiptRepo.ResetStaleParsing(workerCtx, time.Duration(cfg.ExtractionTimeoutSec+30)*time.Second); err != nil {
-			logger.Error("reset stale parsing failed", "error", err)
-		} else if n > 0 {
-			logger.Info("reset stale parsing receipts", "count", n)
-		}
-		queue.RequeuePending(workerCtx, receiptRepo.ListIDsByStatus)
+		// Same rule at startup and periodically: "parsing" rows older than job timeout + grace
+		// go back to "uploaded", then everything "uploaded" is (re)queued.
+		queue.Recover(workerCtx, receiptRepo.ResetStaleParsing, receiptRepo.ListIDsByStatus)
+		queue.StartSweeper(workerCtx, time.Duration(cfg.ExtractionSweepSec)*time.Second,
+			receiptRepo.ResetStaleParsing, receiptRepo.ListIDsByStatus)
 	}
 	uploadHandler := &handlers.UploadHandler{Store: docRepo, Receipts: receiptRepo, Blobs: blobs,
 		MaxBytes: cfg.MaxUploadBytes, Logger: logger}

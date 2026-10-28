@@ -164,3 +164,45 @@ func (q *Queue) RequeuePending(ctx context.Context, list func(ctx context.Contex
 		q.Enqueue(id)
 	}
 }
+
+// StaleGrace is added to the job timeout before a "parsing" row counts as abandoned.
+const StaleGrace = 30 * time.Second
+
+// StaleAfter is how old a claim must be before the sweep may reset it: longer than any live
+// job can run (job timeout + grace), so a sweep never steals a claim that is still working.
+func (q *Queue) StaleAfter() time.Duration { return q.timeout + StaleGrace }
+
+// Recover resets abandoned "parsing" rows (older than StaleAfter) to "uploaded" and requeues
+// everything "uploaded". Used at startup and by the periodic sweep, so both share one rule.
+func (q *Queue) Recover(ctx context.Context, reset func(ctx context.Context, olderThan time.Duration) ([]int, error),
+	list func(ctx context.Context, statuses ...string) ([]int, error)) {
+	if ids, err := reset(ctx, q.StaleAfter()); err != nil {
+		q.log.Error("reset stale parsing failed", "error", err)
+	} else if len(ids) > 0 {
+		q.log.Warn("reset stale parsing receipts", "count", len(ids), "receipt_ids", ids)
+	}
+	q.RequeuePending(ctx, list)
+}
+
+// StartSweeper runs Recover every interval until ctx is cancelled or Shutdown is called.
+// interval <= 0 disables the periodic sweep (startup recovery still runs).
+func (q *Queue) StartSweeper(ctx context.Context, interval time.Duration, reset func(ctx context.Context, olderThan time.Duration) ([]int, error),
+	list func(ctx context.Context, statuses ...string) ([]int, error)) {
+	if interval <= 0 {
+		return
+	}
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-q.stop:
+				return
+			case <-t.C:
+				q.Recover(ctx, reset, list)
+			}
+		}
+	}()
+}

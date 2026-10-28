@@ -42,3 +42,14 @@ func TestExtractionShutdownTimeout(t *testing.T) {
 		t.Fatalf("env = %d", c.ExtractionShutdownSec)
 	}
 }
+
+func TestExtractionSweepInterval(t *testing.T) {
+	t.Setenv("EXTRACTION_STALE_SWEEP_INTERVAL", "")
+	if c, _ := Load(); c.ExtractionSweepSec != 60 {
+		t.Fatalf("default = %d", c.ExtractionSweepSec)
+	}
+	t.Setenv("EXTRACTION_STALE_SWEEP_INTERVAL", "0")
+	if c, _ := Load(); c.ExtractionSweepSec != 0 {
+		t.Fatalf("disabled = %d", c.ExtractionSweepSec)
+	}
+}
