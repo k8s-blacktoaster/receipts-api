@@ -429,3 +429,31 @@ func (r *Receipt) ReadyForReview() error {
 	}
 	return nil
 }
+
+// ReviewItem is one unmapped line in the product review queue (NORM-02).
+type ReviewItem struct {
+	ItemID               int64    `json:"item_id"`
+	ReceiptID            int64    `json:"receipt_id"`
+	ReceiptDate          string   `json:"receipt_date,omitempty"`
+	ReceiptStatus        string   `json:"receipt_status"`
+	MerchantID           *int64   `json:"merchant_id,omitempty"`
+	MerchantName         string   `json:"merchant_name,omitempty"`
+	LineNo               *int     `json:"line_no,omitempty"`
+	RawText              string   `json:"raw_text,omitempty"`
+	Name                 string   `json:"name"`
+	ItemNumber           string   `json:"item_number,omitempty"`
+	UPC                  string   `json:"upc,omitempty"`
+	LineTotalCents       int64    `json:"line_total_cents"`
+	SuggestedProductID   *int64   `json:"suggested_product_id,omitempty"`
+	SuggestedProductName string   `json:"suggested_product_name,omitempty"`
+	MatchConfidence      *float64 `json:"match_confidence,omitempty"`
+}
+
+// MapResult reports a review-queue correction: the alias it taught and how many other
+// unmapped lines of the same merchant it resolved.
+type MapResult struct {
+	ItemID     int64 `json:"item_id"`
+	ProductID  int64 `json:"product_id"`
+	AliasID    int64 `json:"alias_id,omitempty"` // 0 when the receipt has no merchant yet
+	AlsoMapped int   `json:"also_mapped"`
+}
