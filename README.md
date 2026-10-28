@@ -128,7 +128,8 @@ On SIGTERM the server stops accepting HTTP requests and extraction jobs, waits u
 `EXTRACTION_SHUTDOWN_TIMEOUT` seconds (default 25) for in-flight provider calls, then cancels
 them; a cancelled job puts its own receipt back to `uploaded` (best-effort, short background
 context). As a backstop, at startup and every `EXTRACTION_STALE_SWEEP_INTERVAL` seconds
-(default 60, 0 = off) receipts `parsing` longer than the job timeout + 30s grace are reset to
+(default 60, 0 = off) receipts `parsing` longer than `EXTRACTION_TIMEOUT_SECONDS` + 60s (queue job timeout = provider
+timeout + 30s, plus 30s grace) are reset to
 `uploaded`, and everything `uploaded` is requeued. Credentials in errors are always replaced by
 the literal `[REDACTED]`.
 
