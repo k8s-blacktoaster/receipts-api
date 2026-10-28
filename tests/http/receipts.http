@@ -260,6 +260,39 @@ Content-Type: application/json
 ### Swagger docs
 GET {{base_url}}/swagger/doc.json
 
+### Upload a receipt photo (multipart). 202 + receipt_id; same image again -> 200 duplicate
+# Put a JPEG/PNG at tests/http/fixtures/receipt.jpg (not committed) or point at your own file.
+POST {{base_url}}/api/v1/uploads
+Content-Type: multipart/form-data; boundary=ReceiptBoundary
+
+--ReceiptBoundary
+Content-Disposition: form-data; name="uploaded_by_id"
+
+1
+--ReceiptBoundary
+Content-Disposition: form-data; name="image"; filename="receipt.jpg"
+Content-Type: image/jpeg
+
+< ./fixtures/receipt.jpg
+--ReceiptBoundary--
+
+### Check extraction status (uploaded -> parsing -> parsed | needs_review | failed)
+GET {{base_url}}/api/v1/receipts/3
+
+### Re-run extraction for a photo receipt (e.g. after "failed")
+POST {{base_url}}/api/v1/receipts/3/extract
+
+### Upload rejected: unsupported type (expect 415)
+POST {{base_url}}/api/v1/uploads
+Content-Type: multipart/form-data; boundary=ReceiptBoundary
+
+--ReceiptBoundary
+Content-Disposition: form-data; name="image"; filename="note.txt"
+Content-Type: text/plain
+
+not an image
+--ReceiptBoundary--
+
 ### Delete a receipt (replace {id} with actual ID)
 DELETE {{base_url}}/api/v1/receipts/1
 

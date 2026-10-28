@@ -97,6 +97,33 @@ The API includes a complete Receipts CRUD API:
 | POST | `/api/v1/receipts` | Create a new receipt |
 | PUT | `/api/v1/receipts/{id}` | Update an existing receipt |
 | DELETE | `/api/v1/receipts/{id}` | Delete a receipt |
+| POST | `/api/v1/uploads` | Upload a receipt photo (multipart `image`, JPEG/PNG, max 20 MiB); 202 + queued extraction, 200 if the same image was already uploaded |
+| POST | `/api/v1/receipts/{id}/extract` | Re-run extraction for a photo receipt |
+
+### Photo extraction
+
+Uploaded photos are stored under `UPLOAD_DIR` and a receipt is created with status `uploaded`.
+A background worker moves it `uploaded -> parsing -> parsed | needs_review | failed`, recording
+`parse_error`, `parse_started_at` and `parsed_at`. A receipt lands in `needs_review` when a
+required field is missing or the printed total does not match subtotal + tax - savings (or
+subtotal + tax + adjustments) within `EXTRACTION_TOLERANCE_CENTS`.
+
+The extraction provider is chosen with `EXTRACTION_PROVIDER` (`xai` default, `anthropic` stub,
+`none`). The xAI provider calls the Grok vision model (`EXTRACTION_MODEL`, default `grok-4.20`)
+with a strict JSON schema.
+
+**API key:** `XAI_API_KEY` is read only from the environment. Never commit it. In Kubernetes:
+
+```yaml
+# kubectl create secret generic receipts-api-xai --from-literal=XAI_API_KEY=...
+env:
+  - name: XAI_API_KEY
+    valueFrom:
+      secretKeyRef: { name: receipts-api-xai, key: XAI_API_KEY }
+```
+
+Without a key the API still accepts uploads; they stay `uploaded` until a provider is configured
+(they are re-queued on startup).
 
 ### Example Receipt JSON:
 ```json
@@ -176,6 +203,12 @@ ENVIRONMENT=development  # development, production
 # Database Pool
 DB_MAX_CONNS=25
 DB_MAX_IDLE=5
+
+# Uploads / extraction (see "Photo extraction"; XAI_API_KEY from env or k8s Secret only)
+UPLOAD_DIR=data/uploads
+EXTRACTION_PROVIDER=xai   # xai | anthropic | none
+EXTRACTION_MODEL=         # default grok-4.20
+XAI_API_KEY=              # never commit
 ```
 
 ### Testing
