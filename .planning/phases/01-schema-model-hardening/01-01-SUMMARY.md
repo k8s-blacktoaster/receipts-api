@@ -54,3 +54,13 @@
 - Tests: TestQAReproLegacyStoreNameVariants (001/002 legacy data -> Costco, Trader Joes),
   TestMerchantBackfillDisplayName, TestMerchantAllCapsUpgrade, TestMerchantInternalWhitespaceAndCasingUpgrade.
 - 16/16 repository integration tests pass; pg_dump -s identical after down 2 / up.
+
+## 006 display-name rule revised (CoS, 2026-10-27; 006 edited in place - unreleased, only test DBs ran it)
+- Any mixed-case variant beats ALL-CAPS/all-lower regardless of count; among mixed-case
+  variants the most frequent wins. No mixed-case variant -> initcap() of the collapsed name.
+- Repo: a mixed-case name upgrades a stored all-lower, ALL-CAPS or initcap'd name (initcap'd only
+  by a non-initcap mixed name); a stored mixed-case name is never replaced (no flip-flop).
+- Known quirk: initcap("TRADER JOE'S") = "Trader Joe'S"; fixed as soon as a real "Trader Joe's" arrives.
+- Tests: TestLegacyMixedCaseBeatsCountAndInitcap (3x COSTCO + 1x Costco -> Costco; whole foods /
+  WHOLE  FOODS -> Whole Foods), TestMerchantBackfillDisplayName (updated), TestMerchantInitcapUpgradeNoFlipFlop.
+- 18/18 repository integration tests pass; pg_dump -s identical after down 2 / up.
