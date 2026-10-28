@@ -108,7 +108,7 @@ func TestReconcileNegativeAndDiscountLookingNames(t *testing.T) {
 // receipt-v4: the branch line must not be used as the merchant (generic; synthetic data).
 func TestMerchantLooksLikeLocation(t *testing.T) {
 	base := func(name string) *models.Receipt {
-		r := &models.Receipt{SubtotalCents: 500, TotalCents: 500, StoreCity: "Springfield", StoreAddress: "1 Test Ave",
+		r := &models.Receipt{SubtotalCents: 500, TotalCents: 500, StoreCity: "Springfield", StoreAddress: "1 Test Ave, Suite 4",
 			Items: []models.ReceiptItem{item("WIDGET", 500, 0)}}
 		r.Date = "2026-01-02"
 		r.StoreName = name
@@ -116,8 +116,11 @@ func TestMerchantLooksLikeLocation(t *testing.T) {
 	}
 	for name, want := range map[string]string{
 		"SPRINGFIELD #123": "contains a store number", "Springfield": "same as the store city",
-		"1 TEST AVE": "same as the store address", "Store 45": "contains a store number",
+		"1 TEST AVE, Suite 4": "same as the store address", "1 TEST AVE": "contains the store street address", "Store 45": "contains a store number",
 		"Acme": "", "Acme Market": "", "7 Peaks Cafe": "",
+		"Acme Springfield": "contains the store city", "Springfield Acme Market": "contains the store city",
+		"Acme 1 Test Ave": "contains the store street address", "Springfielder Deli": "",
+		"Acme Test": "",
 	} {
 		r := base(name)
 		rs := Check(r, &Extracted{SubtotalCents: ptr(500), TotalCents: ptr(500)}, 2)

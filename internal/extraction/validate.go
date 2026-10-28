@@ -147,18 +147,59 @@ func sharesWord(a, b string) bool {
 var storeNumberLike = regexp.MustCompile(`#\s*\d+|(?i)\b(store|branch|location)\s*#?\s*\d+`)
 
 // merchantLooksLikeLocation catches a branch line used as the merchant (generic: compares with
-// the receipt's own store fields, no brand list).
+// the receipt's own store fields, no brand list). Matching is on whole normalized tokens, so
+// "Safeway Oakland" (city Oakland) and "Target 123 Main St" (address "123 Main St, Ste 4") are
+// flagged while "Oaklander Deli" is not.
 func merchantLooksLikeLocation(r *models.Receipt) string {
-	key := models.NormalizeMerchantName(r.StoreName)
-	switch {
-	case storeNumberLike.MatchString(r.StoreName):
+	key := nameTokens((r.StoreName))
+	if storeNumberLike.MatchString(r.StoreName) {
 		return "contains a store number"
-	case r.StoreCity != "" && key == models.NormalizeMerchantName(r.StoreCity):
-		return "same as the store city"
-	case r.StoreAddress != "" && key == models.NormalizeMerchantName(r.StoreAddress):
-		return "same as the store address"
+	}
+	if city := nameTokens((r.StoreCity)); len(city) > 0 {
+		if equalTokens(key, city) {
+			return "same as the store city"
+		}
+		if containsTokens(key, city) {
+			return "contains the store city"
+		}
+	}
+	if r.StoreAddress != "" {
+		addr := nameTokens((r.StoreAddress))
+		if equalTokens(key, addr) {
+			return "same as the store address"
+		}
+		street := nameTokens((strings.SplitN(r.StoreAddress, ",", 2)[0]))
+		if len(street) >= 2 && containsTokens(key, street) {
+			return "contains the store street address"
+		}
 	}
 	return ""
+}
+
+// nameTokens splits a value into the merchant-key tokens (same normalization as stored names).
+func nameTokens(s string) []string {
+	return strings.FieldsFunc(models.NormalizeMerchantName(s), func(r rune) bool { return r == '_' })
+}
+
+func equalTokens(a, b []string) bool {
+	return len(a) == len(b) && containsTokens(a, b)
+}
+
+// containsTokens reports whether needle appears as a contiguous run of whole tokens in hay.
+func containsTokens(hay, needle []string) bool {
+	if len(needle) == 0 || len(needle) > len(hay) {
+		return false
+	}
+outer:
+	for i := 0; i+len(needle) <= len(hay); i++ {
+		for j := range needle {
+			if hay[i+j] != needle[j] {
+				continue outer
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func strconvQuote(s string) string { return fmt.Sprintf("%q", s) }
