@@ -78,6 +78,7 @@ trigram index from migration 006.
 columns) once every reader uses merchants/stores; paired down migration restores them.
 
 ## Decisions (2026-10-27, Jack via CoS)
+- Never edit a migration that has already been pushed; add a new one (from 013 on).
 - Rolling back 004 collapses status to review_state ('auto'/'needs_review'/'reviewed'); accepted, documented in 004 down.
 - Case-insensitive merchant matching/merging (e.g. in store_spending_view) is intended.
 - Legacy store_* columns kept for now; cleanup is Phase 7.

@@ -314,12 +314,16 @@ func learnAlias(ctx context.Context, q txExec, merchantID int64, text, itemNo st
 		// also remember this printed text (no item number: that key is taken by byNum)
 		var id int64
 		err := q.QueryRowContext(ctx, `INSERT INTO product_aliases (product_id, merchant_id, alias_text, source, confidence)
-			VALUES ($1,$2,$3,'manual',1) RETURNING id`, productID, merchantID, text).Scan(&id)
+			VALUES ($1,$2,$3,'manual',1) ON CONFLICT (merchant_id, item_alias_key(alias_text)) DO UPDATE SET product_id = EXCLUDED.product_id,
+			source = 'manual', confidence = 1, item_number = COALESCE(product_aliases.item_number, EXCLUDED.item_number)
+			RETURNING id`, productID, merchantID, text).Scan(&id)
 		return id, err
 	default:
 		var id int64
 		err := q.QueryRowContext(ctx, `INSERT INTO product_aliases (product_id, merchant_id, alias_text, item_number, source, confidence)
-			VALUES ($1,$2,$3,$4,'manual',1) RETURNING id`, productID, merchantID, text, nullStr(itemNo)).Scan(&id)
+			VALUES ($1,$2,$3,$4,'manual',1) ON CONFLICT (merchant_id, item_alias_key(alias_text)) DO UPDATE SET product_id = EXCLUDED.product_id,
+			source = 'manual', confidence = 1, item_number = COALESCE(product_aliases.item_number, EXCLUDED.item_number)
+			RETURNING id`, productID, merchantID, text, nullStr(itemNo)).Scan(&id)
 		return id, err
 	}
 }
@@ -342,7 +346,7 @@ func (r *productRepo) UpsertAlias(ctx context.Context, a *models.ProductAlias) e
 	err := r.db.QueryRowContext(ctx, `
 		INSERT INTO product_aliases (product_id, merchant_id, alias_text, item_number, source, confidence, upc)
 		VALUES ($1,$2,$3,$4,$5,$6,$7)
-		ON CONFLICT (merchant_id, (lower(alias_text))) DO UPDATE SET
+		ON CONFLICT (merchant_id, item_alias_key(alias_text)) DO UPDATE SET
 			product_id = EXCLUDED.product_id,
 			item_number = COALESCE(EXCLUDED.item_number, product_aliases.item_number),
 			upc = COALESCE(EXCLUDED.upc, product_aliases.upc),
