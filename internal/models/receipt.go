@@ -95,18 +95,23 @@ type Receipt struct {
 
 // ReceiptItem is one printed line. SKU, ItemNumber and UPC are generic optional identifiers.
 type ReceiptItem struct {
-	ID          int     `json:"id,omitempty"`
-	ReceiptID   int     `json:"-"`
-	LineNo      *int    `json:"line_no,omitempty"`
-	RawText     string  `json:"raw_text,omitempty"`
-	SKU         string  `json:"sku,omitempty"`
-	ItemNumber  string  `json:"item_number,omitempty"`
-	UPC         string  `json:"upc,omitempty"`
-	ProductID   *int64  `json:"product_id,omitempty"`
-	Name        string  `json:"name"`
-	Description string  `json:"description,omitempty"`
-	Quantity    float64 `json:"quantity"` // fractional for weighted items (NUMERIC(12,3))
-	Unit        string  `json:"unit,omitempty"`
+	ID         int    `json:"id,omitempty"`
+	ReceiptID  int    `json:"-"`
+	LineNo     *int   `json:"line_no,omitempty"`
+	RawText    string `json:"raw_text,omitempty"`
+	SKU        string `json:"sku,omitempty"`
+	ItemNumber string `json:"item_number,omitempty"`
+	UPC        string `json:"upc,omitempty"`
+	ProductID  *int64 `json:"product_id,omitempty"`
+	// How ProductID was found (item_number, upc, exact, fuzzy, llm, manual) and how sure.
+	// When ProductID is nil, SuggestedProductID/MatchConfidence carry the review-queue suggestion.
+	MatchSource        string   `json:"match_source,omitempty"`
+	MatchConfidence    *float64 `json:"match_confidence,omitempty"`
+	SuggestedProductID *int64   `json:"suggested_product_id,omitempty"`
+	Name               string   `json:"name"`
+	Description        string   `json:"description,omitempty"`
+	Quantity           float64  `json:"quantity"` // fractional for weighted items (NUMERIC(12,3))
+	Unit               string   `json:"unit,omitempty"`
 
 	UnitPriceCents int64 `json:"unit_price_cents"`
 	LineTotalCents int64 `json:"line_total_cents"` // printed extended price; derived if 0
@@ -257,6 +262,12 @@ func (r *Receipt) Validate() error {
 		if it.DiscountCents < 0 {
 			return fmt.Errorf("Item discount cannot be negative for item %d", i+1)
 		}
+		if it.MatchSource != "" && !ValidMatchSources[it.MatchSource] {
+			return fmt.Errorf("Invalid match_source for item %d", i+1)
+		}
+		if c := it.MatchConfidence; c != nil && !(*c >= 0 && *c <= 1) {
+			return fmt.Errorf("match_confidence must be between 0 and 1 for item %d", i+1)
+		}
 	}
 	for i, a := range r.Adjustments {
 		if !validAdjustmentKinds[a.Kind] {
@@ -274,6 +285,11 @@ type Product struct {
 	Category      string    `json:"category,omitempty"`
 	UPC           string    `json:"upc,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
+}
+
+// ValidMatchSources mirrors the receipt_items.match_source / product_aliases.source CHECKs.
+var ValidMatchSources = map[string]bool{
+	"item_number": true, "upc": true, "exact": true, "fuzzy": true, "llm": true, "manual": true,
 }
 
 // ProductAlias maps how one merchant prints a product to the canonical product.

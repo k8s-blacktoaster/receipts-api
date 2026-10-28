@@ -62,3 +62,18 @@ func TestValidate(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateMatchFields(t *testing.T) {
+	ok, bad := 0.5, 1.5
+	for _, tc := range []struct {
+		src  string
+		conf *float64
+		want bool
+	}{{"", nil, true}, {"manual", &ok, true}, {"fuzzy", nil, true}, {"guess", nil, false}, {"exact", &bad, false}} {
+		r := &Receipt{StoreName: "Acme", Date: "2026-01-02", Items: []ReceiptItem{{Name: "x", Quantity: 1,
+			MatchSource: tc.src, MatchConfidence: tc.conf}}}
+		if err := r.Validate(); (err == nil) != tc.want {
+			t.Errorf("%q %v: err=%v", tc.src, tc.conf, err)
+		}
+	}
+}

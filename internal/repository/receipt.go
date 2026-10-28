@@ -155,13 +155,15 @@ func insertChildren(ctx context.Context, q txExec, r *models.Receipt, now time.T
 			INSERT INTO receipt_items (
 				receipt_id, line_no, raw_text, sku, item_number, upc, product_id, name, description,
 				quantity, unit, unit_price_cents, line_total_cents, discount_cents,
-				taxable, tax_flag, is_return, edited_at, created_at, updated_at
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$19)
+				taxable, tax_flag, is_return, edited_at, created_at, updated_at,
+				match_source, match_confidence, suggested_product_id
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$19,$20,$21,$22)
 			RETURNING id, net_total_cents`,
 			it.ReceiptID, it.LineNo, nullStr(it.RawText), nullStr(it.SKU), nullStr(it.ItemNumber), nullStr(it.UPC),
 			it.ProductID, it.Name, nullStr(it.Description), it.Quantity, nullStr(it.Unit),
 			it.UnitPriceCents, it.LineTotalCents, it.DiscountCents, it.Taxable, nullStr(it.TaxFlag),
 			it.IsReturn, it.EditedAt, now,
+			nullStr(it.MatchSource), it.MatchConfidence, it.SuggestedProductID,
 		).Scan(&it.ID, &it.NetTotalCents)
 		if err != nil {
 			return fmt.Errorf("failed to create receipt item: %w", err)
@@ -279,7 +281,8 @@ func (r *receiptRepo) GetByID(ctx context.Context, id int) (*models.Receipt, err
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, receipt_id, line_no, raw_text, sku, item_number, upc, product_id, name, description,
 		       quantity::float8, unit, unit_price_cents, line_total_cents, discount_cents, net_total_cents,
-		       taxable, tax_flag, is_return, edited_at, created_at, updated_at
+		       taxable, tax_flag, is_return, edited_at, created_at, updated_at,
+		       match_source, match_confidence::float8, suggested_product_id
 		FROM receipt_items WHERE receipt_id = $1 ORDER BY line_no NULLS LAST, id`, id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get receipt items: %w", err)
@@ -287,16 +290,18 @@ func (r *receiptRepo) GetByID(ctx context.Context, id int) (*models.Receipt, err
 	defer rows.Close()
 	for rows.Next() {
 		var it models.ReceiptItem
-		var raw, sku, itemNo, upc, desc, unit, flag sql.NullString
+		var raw, sku, itemNo, upc, desc, unit, flag, msrc sql.NullString
 		var created, updated time.Time
 		if err := rows.Scan(&it.ID, &it.ReceiptID, &it.LineNo, &raw, &sku, &itemNo, &upc, &it.ProductID,
 			&it.Name, &desc, &it.Quantity, &unit, &it.UnitPriceCents, &it.LineTotalCents, &it.DiscountCents,
-			&it.NetTotalCents, &it.Taxable, &flag, &it.IsReturn, &it.EditedAt, &created, &updated); err != nil {
+			&it.NetTotalCents, &it.Taxable, &flag, &it.IsReturn, &it.EditedAt, &created, &updated,
+			&msrc, &it.MatchConfidence, &it.SuggestedProductID); err != nil {
 			return nil, fmt.Errorf("failed to scan receipt item: %w", err)
 		}
 		it.RawText, it.SKU, it.ItemNumber, it.UPC = raw.String, sku.String, itemNo.String, upc.String
 		it.Description, it.Unit, it.TaxFlag = desc.String, unit.String, flag.String
 		it.CreatedAt, it.UpdatedAt = created, updated
+		it.MatchSource = msrc.String
 		receipt.Items = append(receipt.Items, it)
 	}
 	if err := rows.Err(); err != nil {
