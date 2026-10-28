@@ -211,7 +211,6 @@ Content-Type: application/json
       "name": "PAPER TOWEL",
       "quantity": 1,
       "unit_price_cents": 2299,
-      "discount_cents": 500,
       "tax_flag": "A",
       "taxable": true
     },
