@@ -23,7 +23,9 @@
 - [ ] **UI-01**: Mobile-friendly web UI: camera capture on the phone, multiple photos per receipt, upload status
 - [ ] **UI-02**: Receipt list showing parse/review status; simple edit/review of parsed line items
 - [ ] **UI-03**: Served from the same deployment (static assets embedded in the Go binary), VPN-only. No chat or bot in the UI.
-- [ ] **UI-04** (phase 3): Manual merchant rename in the web UI is a simple edit; the new name is re-normalized with NormalizeMerchantName (merging into an existing merchant if the key already exists).
+- [ ] **UI-04** (phase 3): Manual merchant rename in the web UI is a simple edit; the new name is re-normalized with NormalizeMerchantName. If the key already belongs to another merchant the rename is refused with 409 naming that merchant (v1 decision 2026-10-27: no silent merge; an explicit merge that dedupes stores/aliases is deferred to phase 4).
+- [ ] **UI-05** (phase 3): Edits to a receipt, its items or adjustments are refused with 409 while the receipt is `uploaded` (queued) or `parsing`, so a re-extract or later parse can never overwrite them; DELETE is 409 while `parsing`. Re-extract moves the receipt to `uploaded` first.
+- [ ] **UI-06** (phase 3): Member picker (cookie), no other auth; access control is the VPN.
 ### Normalization
 - [ ] **NORM-01**: Line items map to canonical products via merchant-scoped item number / UPC, then alias, then fuzzy/LLM suggestion
 - [ ] **NORM-02**: Unmapped/low-confidence lines appear in the review queue and are fixable
@@ -38,6 +40,9 @@
 ### Deploy
 - [ ] **OPS-01**: Manifests for api(+UI), worker, mcp, Postgres (CNPG), object store, secrets
 - [ ] **OPS-02**: Nightly DB backup + image bucket backup, tested restore
+- [ ] **OPS-04**: CI mirrors world-cup-site: `.github/workflows/build-api.yml` on `runs-on: [self-hosted, k3s]` (host Docker), `docker build --target test .` gates the job (go vet + go test in the image, no DB/live LLM), then `docker build` and `docker push registry.k8s.blacktoaster.com/receipts/api:<sha7>` (immutable sha7 tag, `GITHUB_SHA::7`); step summary says which `api.tag` to bump. Dockerfile gains a `test` stage.
+- [ ] **OPS-05**: Helm chart (like world-cup-site/helm): `ExternalSecret` (external-secrets.io/v1beta1) with `secretStoreRef: {name: vault-backend, kind: ClusterSecretStore}`, `remoteRef.key: apps/receipts/app`, properties `xai-api-key` (-> secret key mapped to env `XAI_API_KEY` via secretKeyRef) and `db-password`; refreshInterval 1m, creationPolicy Owner. No secrets in values.yaml.
+- [ ] **OPS-06**: cert-manager `Certificate` issued by ClusterIssuer `vault-issuer` (commonName/dnsNames = host, secretName = ingress TLS secret) and an nginx `Ingress` (ssl-redirect, optional external-dns target) referencing that secret; single backend service (API + embedded UI). VPN-only exposure.
 - [ ] **OPS-03**: Postgres must use a UTF-8 locale/collation (not "C"), or merchant_name_key() must use an explicit collation (e.g. ICU "und-x-icu"), so SQL lower() matches Go for non-ASCII merchant names
 
 ## v2 Requirements
