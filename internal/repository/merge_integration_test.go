@@ -24,6 +24,7 @@ func TestMerchantMerge(t *testing.T) {
 	from1 := mk("Corner Mkt", "12", "")         // same store number -> folded
 	from2 := mk("Corner Mkt", "", "1 ELM ST")   // same address -> folded
 	from3 := mk("Corner Mkt", "40", "9 Oak Rd") // new store -> moved
+	from4 := mk("Corner Mkt", "41", "1 Elm St") // same address, other number -> kept, not folded
 	p := &models.Product{CanonicalName: "Bread"}
 	q := &models.Product{CanonicalName: "Rolls"}
 	_ = products.CreateProduct(ctx, p)
@@ -60,8 +61,8 @@ func TestMerchantMerge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Receipts != 3 || res.StoresFolded != 2 || res.StoresMoved != 1 || res.AliasesDropped != 1 ||
-		res.ItemNumbersCleared != 1 || res.AliasesMoved != 2 || res.Into.ReceiptCount != 4 {
+	if res.Receipts != 4 || res.StoresFolded != 2 || res.StoresMoved != 2 || res.AliasesDropped != 1 ||
+		res.ItemNumbersCleared != 1 || res.AliasesMoved != 2 || res.Into.ReceiptCount != 5 {
 		t.Fatalf("result %+v", res)
 	}
 	if _, err := merchants.GetByID(ctx, from1.MerchantID); !errors.Is(err, ErrNotFound) {
@@ -72,6 +73,12 @@ func TestMerchantMerge(t *testing.T) {
 		if got.MerchantID != into.MerchantID || got.StoreID == nil || *got.StoreID != *into.StoreID {
 			t.Errorf("receipt %d: merchant %d store %v", r.ID, got.MerchantID, got.StoreID)
 		}
+	}
+	g4, _ := receipts.GetByID(ctx, from4.ID)
+	var num string
+	_ = db.QueryRowContext(ctx, `SELECT store_number FROM stores WHERE id = $1`, *g4.StoreID).Scan(&num)
+	if *g4.StoreID == *into.StoreID || num != "41" {
+		t.Errorf("numbered store folded by address: store %d number %q", *g4.StoreID, num)
 	}
 	var cleared int
 	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM product_aliases WHERE alias_text = 'DINNER ROLLS' AND item_number IS NULL AND merchant_id = $1`, into.MerchantID).Scan(&cleared)

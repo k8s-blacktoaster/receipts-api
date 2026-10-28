@@ -34,7 +34,8 @@ type MerchantRepository interface {
 	// another merchant returns *MerchantConflict (errors.Is ErrMerchantNameTaken).
 	Rename(ctx context.Context, id int64, newName string) (*models.Merchant, error)
 	// Merge moves everything from merchant `from` into `into` and deletes `from` (NORM-03):
-	// receipts; stores (a store matching one of into's by number or address is folded into it);
+	// receipts; stores (same number -> folded; a numberless store with the same address -> folded;
+	// a numbered store is never folded by address, both are kept);
 	// aliases (a text collision keeps into's alias; an item-number collision keeps the moved
 	// alias with item_number cleared). Refused (ErrReceiptBusy) while any of from's receipts is
 	// uploaded/parsing.
@@ -167,11 +168,14 @@ func (r *merchantRepo) Merge(ctx context.Context, from, into int64) (*MergeResul
 		c, _ := out.RowsAffected()
 		return int(c), nil
 	}
-	// Stores: fold a from-store into the into-store with the same number, else the same address.
+	// Stores: fold a from-store into the into-store with the same number. Only a store WITHOUT a
+	// number is folded by address; a numbered store whose address matches a differently (or un-)
+	// numbered store is kept as its own store, so no store number is ever dropped.
 	if _, err := exec(`CREATE TEMP TABLE _fold ON COMMIT DROP AS
 		SELECT s.id, coalesce(
 			(SELECT t.id FROM stores t WHERE t.merchant_id = $2 AND s.store_number IS NOT NULL AND t.store_number = s.store_number),
-			(SELECT t.id FROM stores t WHERE t.merchant_id = $2 AND s.address IS NOT NULL AND lower(t.address) = lower(s.address))) AS keep
+			(SELECT t.id FROM stores t WHERE t.merchant_id = $2 AND s.store_number IS NULL AND s.address IS NOT NULL
+			  AND lower(t.address) = lower(s.address) ORDER BY t.store_number IS NULL DESC, t.id LIMIT 1)) AS keep
 		FROM stores s WHERE s.merchant_id = $1`, from, into); err != nil {
 		return nil, err
 	}
