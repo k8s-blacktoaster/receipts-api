@@ -44,3 +44,13 @@
 | F6 store dupes | 005: unique (merchant_id, lower(address)) where no number; repo upsert | TestF6StoreUpsertByAddress, TestF1F6BackfillMerges |
 | F7 legacy store_* | store_name nullable; receipt_details_view/recent_purchases_view read merchants/stores | TestF7ViewsUseMerchantStore |
 005 down is lossy for merged merchants/stores (not un-merged). pg_dump -s identical after down 1 / up.
+
+## Migration 006 + QA major (2026-10-27)
+- 006: merchant key `lower(regexp_replace(btrim(name), '\s+', ' ', 'g'))`; duplicates merged.
+- Display name is chosen only among existing variants: legacy receipts.store_name values
+  (whitespace-collapsed, one vote per receipt; merchant rows are a zero-vote fallback).
+  Most votes wins; tie -> mixed case over ALL-CAPS/all-lower; casing is never invented.
+- Resolve/insert upgrades an all-lower or ALL-CAPS stored name when a mixed-case variant arrives.
+- Tests: TestQAReproLegacyStoreNameVariants (001/002 legacy data -> Costco, Trader Joes),
+  TestMerchantBackfillDisplayName, TestMerchantAllCapsUpgrade, TestMerchantInternalWhitespaceAndCasingUpgrade.
+- 16/16 repository integration tests pass; pg_dump -s identical after down 2 / up.
