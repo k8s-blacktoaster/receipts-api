@@ -123,3 +123,27 @@ func TestQAReproLegacyStoreNameVariants(t *testing.T) {
 		t.Fatalf("%d receipts lost their merchant", orphans)
 	}
 }
+
+// Resolve/insert upgrades an ALL-CAPS stored name when a mixed-case variant arrives.
+func TestMerchantAllCapsUpgrade(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	repo := NewReceiptRepository(db)
+	for _, n := range []string{"COSTCO", "costco", "Costco", "COSTCO"} {
+		if err := repo.Create(ctx, &models.Receipt{StoreName: n, Date: "2026-10-01"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var names []string
+	rows, _ := db.Query(`SELECT name FROM merchants`)
+	defer rows.Close()
+	for rows.Next() {
+		var n string
+		rows.Scan(&n)
+		names = append(names, n)
+	}
+	// all-lower does not replace ALL-CAPS; mixed case does; later ALL-CAPS does not revert it
+	if len(names) != 1 || names[0] != "Costco" {
+		t.Fatalf("merchants = %q, want [Costco]", names)
+	}
+}
