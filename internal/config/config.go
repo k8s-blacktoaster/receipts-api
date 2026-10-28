@@ -23,6 +23,8 @@ type Config struct {
 	// it is never read from files in the repo and never logged.
 	UploadDir            string
 	MaxUploadBytes       int64
+	KeepOriginalUploads  bool   // also store the original upload next to the normalized JPEG
+	HEICDecoder          string // HEIC decoder binary (empty: search heif-dec, heif-convert, sips)
 	ExtractionProvider   string
 	ExtractionModel      string
 	XAIAPIKey            string
@@ -52,6 +54,8 @@ func Load() (*Config, error) {
 
 		UploadDir:                getEnv("UPLOAD_DIR", "data/uploads"),
 		MaxUploadBytes:           int64(getEnvAsInt("MAX_UPLOAD_BYTES", 20<<20)),
+		KeepOriginalUploads:      getEnvAsBool("KEEP_ORIGINAL_UPLOADS", false),
+		HEICDecoder:              getEnv("HEIC_DECODER", ""),
 		ExtractionProvider:       getEnv("EXTRACTION_PROVIDER", "xai"),
 		ExtractionModel:          os.Getenv("EXTRACTION_MODEL"),
 		XAIAPIKey:                os.Getenv("XAI_API_KEY"),
@@ -116,6 +120,13 @@ func getEnvAsInt(key string, defaultValue int) int {
 		if intVal, err := strconv.Atoi(value); err == nil {
 			return intVal
 		}
+	}
+	return defaultValue
+}
+
+func getEnvAsBool(key string, defaultValue bool) bool {
+	if v, err := strconv.ParseBool(os.Getenv(key)); err == nil {
+		return v
 	}
 	return defaultValue
 }

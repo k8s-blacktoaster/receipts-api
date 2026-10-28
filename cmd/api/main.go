@@ -31,6 +31,7 @@ import (
 	"receipts-db/internal/database"
 	"receipts-db/internal/extraction"
 	"receipts-db/internal/handlers"
+	"receipts-db/internal/imaging"
 	"receipts-db/internal/redact"
 	"receipts-db/internal/repository"
 	"receipts-db/internal/router"
@@ -126,7 +127,13 @@ func main() {
 			receiptRepo.ResetStaleParsing, receiptRepo.ListIDsByStatus)
 	}
 	uploadHandler := &handlers.UploadHandler{Store: docRepo, Receipts: receiptRepo, Blobs: blobs,
-		MaxBytes: cfg.MaxUploadBytes, Logger: logger}
+		MaxBytes: cfg.MaxUploadBytes, Logger: logger, KeepOriginal: cfg.KeepOriginalUploads}
+	if dec := imaging.FindHEICDecoder(cfg.HEICDecoder); dec != nil {
+		uploadHandler.HEIC = dec // avoid a typed-nil interface
+		logger.Info("HEIC uploads enabled", "decoder", dec.Name())
+	} else {
+		logger.Warn("no HEIC decoder found (install libheif-tools); HEIC uploads will get 415")
+	}
 	if queue != nil {
 		uploadHandler.Queue = queue
 	}
