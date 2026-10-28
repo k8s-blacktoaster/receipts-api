@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"receipts-db/internal/redact"
 )
 
 // Processor is satisfied by *Pipeline.
@@ -63,7 +65,7 @@ func (q *Queue) Start(ctx context.Context, n int) {
 				case id := <-q.ch:
 					jctx, cancel := context.WithTimeout(ctx, q.timeout)
 					if _, err := q.p.Process(jctx, id); err != nil {
-						q.log.Error("extraction pipeline error", "receipt_id", id, "error", err)
+						q.log.Error("extraction pipeline error", "receipt_id", id, "error", redact.String(err.Error()))
 					}
 					cancel()
 				}

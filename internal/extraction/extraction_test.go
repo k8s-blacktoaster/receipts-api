@@ -46,6 +46,10 @@ func (f *fakeXAI) handler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if f.status != 0 && f.status != 200 {
 		w.WriteHeader(f.status)
+		if f.status == 401 { // a misbehaving upstream echoing credentials back
+			_, _ = w.Write([]byte(`{"error":{"message":"invalid key ` + strings.TrimPrefix(f.auth, "Bearer ") + `; Authorization: ` + f.auth + `"}}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"error":{"message":"upstream exploded"}}`))
 		return
 	}
@@ -242,5 +246,13 @@ func TestCheck(t *testing.T) {
 		if !strings.Contains(reasons, want) {
 			t.Fatalf("want %q in %q", want, reasons)
 		}
+	}
+}
+
+func TestXAIErrorRedactsEchoedKey(t *testing.T) {
+	_, p := newFake(t, "", 401)
+	_, err := p.Extract(context.Background(), []Image{{MIME: "image/jpeg", Data: jpeg}})
+	if err == nil || strings.Contains(err.Error(), "test-key-not-real") || !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Fatalf("key not redacted: %v", err)
 	}
 }

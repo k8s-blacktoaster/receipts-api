@@ -31,6 +31,7 @@ import (
 	"receipts-db/internal/database"
 	"receipts-db/internal/extraction"
 	"receipts-db/internal/handlers"
+	"receipts-db/internal/redact"
 	"receipts-db/internal/repository"
 	"receipts-db/internal/router"
 	"receipts-db/internal/storage"
@@ -102,7 +103,7 @@ func main() {
 	})
 	if err != nil {
 		// uploads still work; receipts stay "uploaded" until a provider is configured
-		logger.Warn("extraction disabled", "reason", err.Error())
+		logger.Warn("extraction disabled", "reason", redact.String(err.Error()))
 		provider = nil
 	}
 	workerCtx, stopWorkers := context.WithCancel(context.Background())

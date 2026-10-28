@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"receipts-db/internal/models"
+	"receipts-db/internal/redact"
 )
 
 // ReceiptStore is the subset of the receipt repository the pipeline needs.
@@ -46,7 +47,7 @@ type Outcome struct {
 }
 
 func (p *Pipeline) fail(ctx context.Context, rc *models.Receipt, docID int64, raw json.RawMessage, model string, err error) (*Outcome, error) {
-	msg := err.Error()
+	msg := redact.String(err.Error())
 	if len(msg) > 1000 {
 		msg = msg[:1000]
 	}

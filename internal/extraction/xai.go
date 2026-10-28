@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"receipts-db/internal/redact"
 )
 
 // DefaultXAIModel is the default Grok vision model; override with EXTRACTION_MODEL.
@@ -39,6 +41,7 @@ func NewXAIProvider(baseURL, apiKey, model string, timeout time.Duration) (*XAIP
 	if timeout <= 0 {
 		timeout = 120 * time.Second
 	}
+	redact.Register(apiKey)
 	return &XAIProvider{BaseURL: strings.TrimRight(baseURL, "/"), APIKey: apiKey, model: model, HTTP: &http.Client{Timeout: timeout}}, nil
 }
 
@@ -116,7 +119,7 @@ func (p *XAIProvider) Extract(ctx context.Context, images []Image) (*Result, err
 	req.Header.Set("Authorization", "Bearer "+p.APIKey)
 	resp, err := p.HTTP.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("xai request failed: %w", err)
+		return nil, fmt.Errorf("xai request failed: %s", redact.String(err.Error(), p.APIKey))
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
@@ -133,7 +136,7 @@ func (p *XAIProvider) Extract(ctx context.Context, images []Image) (*Result, err
 		if len(msg) > 300 {
 			msg = msg[:300]
 		}
-		return nil, fmt.Errorf("xai returned %d: %s", resp.StatusCode, msg)
+		return nil, fmt.Errorf("xai returned %d: %s", resp.StatusCode, redact.String(msg, p.APIKey))
 	}
 	if len(cr.Choices) == 0 || strings.TrimSpace(cr.Choices[0].Message.Content) == "" {
 		return nil, fmt.Errorf("xai returned no content")

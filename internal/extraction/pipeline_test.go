@@ -154,6 +154,15 @@ func TestPipelineProviderFailure(t *testing.T) {
 	}
 }
 
+func TestPipelineRedactsStoredError(t *testing.T) {
+	p, fr, _ := setup(t, stubProvider{err: errors.New("proxy said: Authorization: Bearer abc123secret")})
+	p.Process(context.Background(), 11)
+	last := fr.calls[len(fr.calls)-1].reason
+	if strings.Contains(last, "abc123secret") || !strings.Contains(last, "[REDACTED]") {
+		t.Fatalf("parse_error not redacted: %q", last)
+	}
+}
+
 func TestPipelineAnthropicStubFails(t *testing.T) {
 	p, fr, _ := setup(t, NewAnthropicProvider("m"))
 	out, _ := p.Process(context.Background(), 11)
