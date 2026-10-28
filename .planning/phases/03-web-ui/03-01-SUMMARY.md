@@ -59,6 +59,14 @@ a process spawn per HEIC upload (tens of ms), fine for a household app.
   | grok-4.20 non-reasoning | 43 | OK | 13-15 s | ~$0.03 | flagged all 3 correctly |
   | grok-4.20 (reasoning) | 22 of 39 (R3 timed out at 300 s) | R2 date/savings wrong | 2m16-5m | ~$0.09+ | missed R2 (prices shifted one row; sums still reconcile) |
 
+- Re-scored against Costco's website receipt text (local only): line items and totals match the
+  photo reading exactly (only spelling differences); receipt 1's date (2026-10-18) is not visible
+  on the photo, so null was the right extraction. Merchant misses (raw values were not saved, so inferred): most likely the model copied the logo text
+  ("... Wholesale") or, with the logo cut off, returned null. Prompt `receipt-v4` asks for the brand
+  only (generic descriptors dropped, never the location line, brand from other printed text if the
+  logo is cut off) and the checker flags a merchant that looks like the store location. Not yet
+  verified live (needs new calls).
+
 ## QA fixes (PR #3 review)
 - M1 CSRF: shared `httpguard`; JSON API requires application/json (415, 1 MiB cap); SameOrigin
   on all `/api/v1` writes including upload and extract; Origin null / same-site refused.

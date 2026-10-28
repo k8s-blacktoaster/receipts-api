@@ -181,7 +181,7 @@ in `UPLOAD_DIR` (orphaned; remove by hand).
 
 The extraction provider is chosen with `EXTRACTION_PROVIDER` (`xai` default, `anthropic` stub,
 `none`). The xAI provider calls the Grok vision model (`EXTRACTION_MODEL`, default `grok-4.7`)
-with a strict JSON schema and prompt `receipt-v3`. `EXTRACTION_REASONING_EFFORT` (default `low`;
+with a strict JSON schema and prompt `receipt-v4`. `EXTRACTION_REASONING_EFFORT` (default `low`;
 `none|low|medium|high|xhigh`) is sent as `reasoning_effort` only to models that accept it
 (grok-4.3, 4.5, 4.6, 4.7; not grok-4.20). `EXTRACTION_TIMEOUT_SECONDS` defaults to 300.
 
@@ -190,7 +190,10 @@ sum(item discounts) + adjustments must equal the subtotal within `EXTRACTION_TOL
 (a pre-discount subtotal is accepted when the total reflects the discounts). Items with a
 negative price (not returns), discount-looking names (SAVINGS/DISCOUNT/COUPON, a trailing
 "3.00-" amount, "/ 12345" references), a deposit/fee counted both as item and adjustment, or a
-savings amount equal to an item price put the receipt in `needs_review` with a reason.
+savings amount equal to an item price put the receipt in `needs_review` with a reason, as does
+a merchant name that looks like the branch line (contains a store number, or equals the store
+city/address). The prompt asks for the brand only (no "Wholesale"/"Inc." style descriptors,
+never the location line).
 
 **API key:** `XAI_API_KEY` is read only from the environment. Never commit it. In Kubernetes:
 
