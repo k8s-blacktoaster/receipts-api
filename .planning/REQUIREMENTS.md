@@ -34,12 +34,12 @@
 - [x] **NORM-04** (phase 4, from phase 3 golden run): the merchant sanity check also flags names that CONTAIN the store city or street (token/substring match on normalized keys), e.g. "Safeway Oakland" or "Target 123 Main St", not only exact matches.
 - [x] **NORM-03**: When merchants merge and aliases collide on (merchant, item_number), keep the colliding alias with item_number cleared (do not drop it); revisit the 006 backfill behaviour here
 ### MCP
-- [ ] **MCP-01**: Streamable HTTP MCP endpoint with read-only tools (search, where-bought, spend, price history)
-- [ ] **MCP-02**: Every answer returns receipt ids/dates so results are verifiable
-- [ ] **MCP-03**: MCP requires authentication
-- [ ] **MCP-04**: Every MCP tool that takes a merchant name runs models.NormalizeMerchantName on its input before lookup
-- [ ] **MCP-05**: list_merchants tool (normalized names, with receipt counts / last visit)
-- [ ] **MCP-06**: No exact normalized match -> fuzzy fallback via pg_trgm similarity() on merchants.name returns ranked candidates, so the bot can resolve nicknames like "TJ's"
+- [x] **MCP-01**: Streamable HTTP MCP endpoint with read-only tools (search, where-bought, spend, price history)
+- [x] **MCP-02**: Every answer returns receipt ids/dates so results are verifiable
+- [x] **MCP-03**: MCP requires authentication
+- [x] **MCP-04**: Every MCP tool that takes a merchant name runs models.NormalizeMerchantName on its input before lookup
+- [x] **MCP-05**: list_merchants tool (normalized names, with receipt counts / last visit)
+- [x] **MCP-06**: No exact normalized match -> fuzzy fallback via pg_trgm similarity() on merchants.name returns ranked candidates, so the bot can resolve nicknames like "TJ's"
 ### Deploy
 - [ ] **OPS-01**: Manifests for api(+UI), worker, mcp, Postgres (CNPG), object store, secrets
 - [ ] **OPS-02**: Nightly DB backup + image bucket backup, tested restore

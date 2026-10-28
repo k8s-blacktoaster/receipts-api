@@ -4,7 +4,7 @@
 - [x] **Phase 2: Upload + extraction pipeline** - photo upload, object store, queue, pluggable vision LLM (Grok default), validation
 - [x] **Phase 3: Mobile web UI** - camera capture, multi-photo, upload status, receipt list, review/edit
 - [x] **Phase 4: Normalization & review** - product matching, alias learning, review endpoints
-- [ ] **Phase 5: MCP server** - read-only tools over Streamable HTTP + auth
+- [x] **Phase 5: MCP server** - read-only tools over Streamable HTTP + auth
 - [ ] **Phase 6: Kubernetes deploy & backups** - CNPG, object store, secrets, ingress, restore drill
 
 ### Phase 1: Schema & model hardening
@@ -58,6 +58,7 @@ VPN-only, no chat. Multi-photo receipts deferred (one photo per upload).
 (MCP-05); pg_trgm fuzzy fallback for nicknames like "TJ's" (MCP-06) uses the merchants.name GIN
 trigram index from migration 006.
 **Plans**: 05-01 (phases/05-mcp-server)
+**Status**: Executed on phase-05-mcp, PR open - see 05-01-SUMMARY.md
 
 ### Phase 6: Kubernetes deploy & backups
 **Depends on**: Phase 2 (can run in parallel with 3-5)

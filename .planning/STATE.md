@@ -25,3 +25,5 @@
   capture, upload normalization to one JPEG + HEIC via libheif CLI (migration 008), Docker
   test stage. See phases/03-web-ui/03-01-SUMMARY.md. Live golden check blocked: xAI rejected
   the local .env key ("Incorrect API key provided").
+- 2026-10-28 phase 4 merged (PR #4, 248f3a4). Phase 5 (MCP server) executed on phase-05-mcp,
+  PR open, awaiting QA. See phases/05-mcp-server/05-01-SUMMARY.md.
