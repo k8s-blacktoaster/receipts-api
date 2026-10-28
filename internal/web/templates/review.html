@@ -1,0 +1,28 @@
+{{define "content"}}
+<p class="hint">Lines with no product yet. Mapping one teaches this merchant's alias (printed text and item number), so matching lines map automatically now and on future receipts.</p>
+{{with .ReviewNav}}<p class="meta">{{if .Total}}{{.From}}–{{.To}} of {{.Total}}{{else}}Nothing to review.{{end}}
+{{if ge .Prev 0}}<a href="/review?offset={{.Prev}}">‹ Prev</a>{{end}} {{if ge .Next 0}}<a href="/review?offset={{.Next}}">Next ›</a>{{end}}</p>{{end}}
+<ul class="review">
+{{range .Review}}
+  <li>
+    <div><strong>{{if .RawText}}{{.RawText}}{{else}}{{.Name}}{{end}}</strong>{{if .ItemNumber}} <span class="meta">#{{.ItemNumber}}</span>{{end}}
+      <span class="meta">${{money .LineTotalCents}} · <a href="/receipts/{{.ReceiptID}}">{{if .MerchantName}}{{.MerchantName}}{{else}}no merchant{{end}} {{.ReceiptDate}}</a></span></div>
+    {{if .SuggestedProductID}}
+    <form method="post" action="/review/items/{{.ItemID}}/map" class="rename">
+      <input type="hidden" name="product_id" value="{{.SuggestedProductID}}">
+      <span>Suggested: {{.SuggestedProductName}}{{with .MatchConfidence}} ({{pct .}}){{end}}</span><span></span>
+      <button class="btn primary">Accept</button>
+    </form>{{end}}
+    {{if .Candidates}}
+    <form method="post" action="/review/items/{{.ItemID}}/map" class="rename">
+      <select name="product_id" aria-label="Product" required>{{range .Candidates}}<option value="{{.ID}}">{{.CanonicalName}}</option>{{end}}</select>
+      <span></span><button class="btn">Map</button>
+    </form>{{end}}
+    <form method="post" action="/review/items/{{.ItemID}}/map" class="rename">
+      <input name="new_name" value="{{.Name}}" aria-label="New product name" maxlength="200" required>
+      <span></span><button class="btn">New product</button>
+    </form>
+  </li>
+{{end}}
+</ul>
+{{end}}

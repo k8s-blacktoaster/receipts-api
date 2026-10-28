@@ -95,18 +95,23 @@ type Receipt struct {
 
 // ReceiptItem is one printed line. SKU, ItemNumber and UPC are generic optional identifiers.
 type ReceiptItem struct {
-	ID          int     `json:"id,omitempty"`
-	ReceiptID   int     `json:"-"`
-	LineNo      *int    `json:"line_no,omitempty"`
-	RawText     string  `json:"raw_text,omitempty"`
-	SKU         string  `json:"sku,omitempty"`
-	ItemNumber  string  `json:"item_number,omitempty"`
-	UPC         string  `json:"upc,omitempty"`
-	ProductID   *int64  `json:"product_id,omitempty"`
-	Name        string  `json:"name"`
-	Description string  `json:"description,omitempty"`
-	Quantity    float64 `json:"quantity"` // fractional for weighted items (NUMERIC(12,3))
-	Unit        string  `json:"unit,omitempty"`
+	ID         int    `json:"id,omitempty"`
+	ReceiptID  int    `json:"-"`
+	LineNo     *int   `json:"line_no,omitempty"`
+	RawText    string `json:"raw_text,omitempty"`
+	SKU        string `json:"sku,omitempty"`
+	ItemNumber string `json:"item_number,omitempty"`
+	UPC        string `json:"upc,omitempty"`
+	ProductID  *int64 `json:"product_id,omitempty"`
+	// How ProductID was found (item_number, upc, exact, fuzzy, llm, manual) and how sure.
+	// When ProductID is nil, SuggestedProductID/MatchConfidence carry the review-queue suggestion.
+	MatchSource        string   `json:"match_source,omitempty"`
+	MatchConfidence    *float64 `json:"match_confidence,omitempty"`
+	SuggestedProductID *int64   `json:"suggested_product_id,omitempty"`
+	Name               string   `json:"name"`
+	Description        string   `json:"description,omitempty"`
+	Quantity           float64  `json:"quantity"` // fractional for weighted items (NUMERIC(12,3))
+	Unit               string   `json:"unit,omitempty"`
 
 	UnitPriceCents int64 `json:"unit_price_cents"`
 	LineTotalCents int64 `json:"line_total_cents"` // printed extended price; derived if 0
@@ -257,6 +262,15 @@ func (r *Receipt) Validate() error {
 		if it.DiscountCents < 0 {
 			return fmt.Errorf("Item discount cannot be negative for item %d", i+1)
 		}
+		if it.UPC != "" && !ValidUPC(it.UPC) {
+			return fmt.Errorf("UPC must be 8, 12, 13 or 14 digits for item %d", i+1)
+		}
+		if it.MatchSource != "" && !ValidMatchSources[it.MatchSource] {
+			return fmt.Errorf("Invalid match_source for item %d", i+1)
+		}
+		if c := it.MatchConfidence; c != nil && !(*c >= 0 && *c <= 1) {
+			return fmt.Errorf("match_confidence must be between 0 and 1 for item %d", i+1)
+		}
 	}
 	for i, a := range r.Adjustments {
 		if !validAdjustmentKinds[a.Kind] {
@@ -276,6 +290,36 @@ type Product struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
+// ValidUPC reports whether s is a UPC/EAN/GTIN: 8, 12, 13 or 14 digits (DB CHECKs in 011).
+func ValidUPC(s string) bool {
+	switch len(s) {
+	case 8, 12, 13, 14:
+	default:
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// CleanUPC strips spaces and dashes; it returns "" when the result is not a valid UPC (used for
+// model-extracted codes, which are dropped rather than failing the receipt).
+func CleanUPC(s string) string {
+	s = strings.NewReplacer(" ", "", "-", "").Replace(strings.TrimSpace(s))
+	if ValidUPC(s) {
+		return s
+	}
+	return ""
+}
+
+// ValidMatchSources mirrors the receipt_items.match_source / product_aliases.source CHECKs.
+var ValidMatchSources = map[string]bool{
+	"item_number": true, "upc": true, "exact": true, "fuzzy": true, "llm": true, "manual": true,
+}
+
 // ProductAlias maps how one merchant prints a product to the canonical product.
 // Unique per (merchant, alias text) and per (merchant, item number).
 type ProductAlias struct {
@@ -284,6 +328,7 @@ type ProductAlias struct {
 	MerchantID int64    `json:"merchant_id"`
 	AliasText  string   `json:"alias_text"`
 	ItemNumber string   `json:"item_number,omitempty"`
+	UPC        string   `json:"upc,omitempty"`
 	Source     string   `json:"source"`
 	Confidence *float64 `json:"confidence,omitempty"`
 }
@@ -410,6 +455,50 @@ func (r *Receipt) ReadyForReview() error {
 	}
 	if r.Date == "" {
 		return errors.New("add the purchase date before approving")
+	}
+	return nil
+}
+
+// ReviewItem is one unmapped line in the product review queue (NORM-02).
+type ReviewItem struct {
+	ItemID               int64    `json:"item_id"`
+	ReceiptID            int64    `json:"receipt_id"`
+	ReceiptDate          string   `json:"receipt_date,omitempty"`
+	ReceiptStatus        string   `json:"receipt_status"`
+	MerchantID           *int64   `json:"merchant_id,omitempty"`
+	MerchantName         string   `json:"merchant_name,omitempty"`
+	LineNo               *int     `json:"line_no,omitempty"`
+	RawText              string   `json:"raw_text,omitempty"`
+	Name                 string   `json:"name"`
+	ItemNumber           string   `json:"item_number,omitempty"`
+	UPC                  string   `json:"upc,omitempty"`
+	LineTotalCents       int64    `json:"line_total_cents"`
+	SuggestedProductID   *int64   `json:"suggested_product_id,omitempty"`
+	SuggestedProductName string   `json:"suggested_product_name,omitempty"`
+	MatchConfidence      *float64 `json:"match_confidence,omitempty"`
+}
+
+// MapResult reports a review-queue correction: the alias it taught and how many other
+// unmapped lines of the same merchant it resolved.
+type MapResult struct {
+	ItemID     int64 `json:"item_id"`
+	ProductID  int64 `json:"product_id"`
+	AliasID    int64 `json:"alias_id,omitempty"` // 0 when the receipt has no merchant yet
+	AlsoMapped int   `json:"also_mapped"`
+}
+
+// Validate checks a product create request.
+func (p *Product) Validate() error {
+	p.CanonicalName = strings.TrimSpace(p.CanonicalName)
+	p.Brand, p.Category, p.UPC = strings.TrimSpace(p.Brand), strings.TrimSpace(p.Category), strings.TrimSpace(p.UPC)
+	if p.CanonicalName == "" {
+		return errors.New("canonical_name is required")
+	}
+	if err := tooLong(map[string]string{"canonical_name": p.CanonicalName, "brand": p.Brand, "category": p.Category}, MaxNameLen); err != nil {
+		return err
+	}
+	if p.UPC != "" && !ValidUPC(p.UPC) {
+		return errors.New("upc must be 8, 12, 13 or 14 digits")
 	}
 	return nil
 }

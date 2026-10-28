@@ -148,7 +148,7 @@ func main() {
 	}
 
 	ui, err := web.New(web.UI{Receipts: receiptRepo, Members: repository.NewMemberRepository(db),
-		Merchants: repository.NewMerchantRepository(db), Docs: docRepo, Blobs: blobs, Uploads: uploadHandler,
+		Merchants: repository.NewMerchantRepository(db), Products: repository.NewProductRepository(db), Docs: docRepo, Blobs: blobs, Uploads: uploadHandler,
 		MaxBytes: cfg.MaxUploadBytes, Logger: logger})
 	if err != nil {
 		logger.Error("web UI templates", "error", err)
@@ -157,7 +157,8 @@ func main() {
 	if queue != nil {
 		ui.Queue = queue
 	}
-	handler := router.New(receiptHandler, uploadHandler, ui, logger)
+	productHandler := &handlers.ProductHandler{Products: repository.NewProductRepository(db), Logger: logger}
+	handler := router.New(receiptHandler, uploadHandler, productHandler, ui, logger)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),

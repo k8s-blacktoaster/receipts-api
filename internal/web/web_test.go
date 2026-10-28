@@ -137,10 +137,63 @@ type fakeQueue struct{ ids []int }
 
 func (q *fakeQueue) Enqueue(id int) bool { q.ids = append(q.ids, id); return true }
 
+func (f *fakeMerchants) Merge(_ context.Context, from, into int64) (*repository.MergeResult, error) {
+	if from == into {
+		return nil, repository.ErrSelfMerge
+	}
+	var src, dst = -1, -1
+	for i := range f.m {
+		switch f.m[i].ID {
+		case from:
+			src = i
+		case into:
+			dst = i
+		}
+	}
+	if src < 0 || dst < 0 {
+		return nil, repository.ErrNotFound
+	}
+	f.m[dst].ReceiptCount += f.m[src].ReceiptCount
+	res := &repository.MergeResult{Into: f.m[dst], Receipts: f.m[src].ReceiptCount}
+	f.m = append(f.m[:src], f.m[src+1:]...)
+	return res, nil
+}
+
+type fakeProducts struct {
+	items   []models.ReviewItem
+	created []models.Product
+	mapped  [][2]int64
+	mapErr  error
+}
+
+func (f *fakeProducts) ListReviewItems(_ context.Context, limit, offset int) ([]models.ReviewItem, int, error) {
+	return f.items, len(f.items), nil
+}
+func (f *fakeProducts) SearchProducts(_ context.Context, q string, limit int) ([]models.Product, error) {
+	return []models.Product{{ID: 5, CanonicalName: "Bananas"}, {ID: 6, CanonicalName: "Plantains"}}, nil
+}
+func (f *fakeProducts) CreateProduct(_ context.Context, p *models.Product) error {
+	p.ID = 50
+	f.created = append(f.created, *p)
+	return nil
+}
+func (f *fakeProducts) MapItem(ctx context.Context, item, product int64, np *models.Product) (*models.MapResult, error) {
+	if f.mapErr != nil {
+		return nil, f.mapErr
+	}
+	if np != nil {
+		_ = f.CreateProduct(ctx, np)
+		product = np.ID
+	}
+	f.mapped = append(f.mapped, [2]int64{item, product})
+	return &models.MapResult{ItemID: item, ProductID: product, AlsoMapped: 3}, nil
+}
+
 type env struct {
 	ui  *UI
 	rs  *fakeReceipts
 	ms  *fakeMerchants
+	ps  *fakeProducts
 	in  *fakeIngest
 	q   *fakeQueue
 	srv http.Handler
@@ -159,7 +212,11 @@ func newEnv(t *testing.T) *env {
 	}}
 	e := &env{rs: rs, ms: &fakeMerchants{m: []models.Merchant{{ID: 1, Name: "sprouts"}, {ID: 2, Name: "trader_joes", ReceiptCount: 4}}},
 		in: &fakeIngest{}, q: &fakeQueue{}}
-	ui, err := New(UI{Receipts: rs, Members: fakeMembers{}, Merchants: e.ms, Docs: fakeDocs{}, Blobs: fakeBlobs{}, Uploads: e.in, Queue: e.q})
+	conf, sug := 0.62, int64(6)
+	e.ps = &fakeProducts{items: []models.ReviewItem{
+		{ItemID: 41, ReceiptID: 7, MerchantName: "sprouts", ReceiptDate: "2026-10-01", RawText: "ORG BANANA", Name: "Bananas", ItemNumber: "4011", LineTotalCents: 129, SuggestedProductID: &sug, SuggestedProductName: "Plantains", MatchConfidence: &conf},
+		{ItemID: 42, ReceiptID: 7, Name: "<b>Milk</b>", LineTotalCents: 699}}}
+	ui, err := New(UI{Receipts: rs, Members: fakeMembers{}, Merchants: e.ms, Products: e.ps, Docs: fakeDocs{}, Blobs: fakeBlobs{}, Uploads: e.in, Queue: e.q})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,6 +252,7 @@ func TestRenderPages(t *testing.T) {
 		"/receipts/9":    {"Re-extract is disabled for reviewed receipts"},
 		"/merchants":     {`value="trader_joes"`, "4 receipts"},
 		"/member":        {"Jack", "Sam", "only reachable on the home VPN"},
+		"/review":        {`href="/review"`, "ORG BANANA", "#4011", "Suggested: Plantains (62%)", `action="/review/items/41/map"`, `<option value="5">Bananas</option>`, "&lt;b&gt;Milk&lt;/b&gt;", "1–2 of 2"},
 		"/static/app.js": {"data-autosubmit"},
 	} {
 		rec := e.do(http.MethodGet, path, nil, false)
@@ -386,11 +444,66 @@ func TestMerchantRename(t *testing.T) {
 		t.Fatalf("rename: %d %+v", rec.Code, e.ms.m)
 	}
 	rec = e.do(http.MethodPost, "/merchants/1/rename", url.Values{"name": {"Trader Joe's"}}, false)
-	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "already exists (#2, 4 receipts)") || e.ms.m[0].Name != "sprouts_farmers_market" {
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "already exists (#2, 4 receipts)") || e.ms.m[0].Name != "sprouts_farmers_market" ||
+		!strings.Contains(rec.Body.String(), `action="/merchants/1/merge"`) || !strings.Contains(rec.Body.String(), "Merge #1 into trader_joes") {
 		t.Fatalf("collision: %d %s", rec.Code, rec.Body)
 	}
 	if rec := e.do(http.MethodPost, "/merchants/1/rename", url.Values{"name": {"!!"}}, false); rec.Code != 400 {
 		t.Fatalf("empty: %d", rec.Code)
+	}
+}
+
+func TestMerchantMergeUI(t *testing.T) {
+	e := newEnv(t)
+	for _, c := range []struct {
+		path, into string
+		code       int
+	}{{"/merchants/1/merge", "1", 400}, {"/merchants/1/merge", "", 400}, {"/merchants/1/merge", "99", 404}, {"/merchants/x/merge", "2", 400}} {
+		if rec := e.do(http.MethodPost, c.path, url.Values{"into_id": {c.into}}, false); rec.Code != c.code {
+			t.Errorf("%s into=%q: %d want %d", c.path, c.into, rec.Code, c.code)
+		}
+	}
+	rec := e.do(http.MethodPost, "/merchants/1/merge", url.Values{"into_id": {"2"}}, false)
+	if rec.Code != 303 || len(e.ms.m) != 1 || !strings.Contains(rec.Header().Get("Location"), "Merged+into+trader_joes") {
+		t.Fatalf("merge: %d %v %s", rec.Code, e.ms.m, rec.Header().Get("Location"))
+	}
+	// cross-site POST refused
+	req := httptest.NewRequest(http.MethodPost, "/merchants/2/merge", strings.NewReader("into_id=1"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://evil.example")
+	rr := httptest.NewRecorder()
+	e.srv.ServeHTTP(rr, req)
+	if rr.Code != 403 {
+		t.Fatalf("cross-site merge: %d", rr.Code)
+	}
+}
+
+func TestReviewMapUI(t *testing.T) {
+	e := newEnv(t)
+	rec := e.do(http.MethodPost, "/review/items/41/map", url.Values{"product_id": {"6"}}, false)
+	if rec.Code != 303 || e.ps.mapped[0] != [2]int64{41, 6} || !strings.Contains(rec.Header().Get("Location"), "plus+3+matching") {
+		t.Fatalf("accept: %d %v %s", rec.Code, e.ps.mapped, rec.Header().Get("Location"))
+	}
+	rec = e.do(http.MethodPost, "/review/items/42/map", url.Values{"new_name": {" Whole milk "}}, false)
+	if rec.Code != 303 || len(e.ps.created) != 1 || e.ps.created[0].CanonicalName != "Whole milk" || e.ps.mapped[1] != [2]int64{42, 50} {
+		t.Fatalf("new: %d %v %v", rec.Code, e.ps.created, e.ps.mapped)
+	}
+	for _, c := range []struct {
+		path string
+		form url.Values
+		err  error
+		code int
+	}{
+		{"/review/items/42/map", url.Values{}, nil, 400},
+		{"/review/items/x/map", url.Values{"product_id": {"5"}}, nil, 400},
+		{"/review/items/42/map", url.Values{"new_name": {strings.Repeat("a", 300)}}, nil, 400},
+		{"/review/items/42/map", url.Values{"product_id": {"5"}}, repository.ErrReceiptBusy, 409},
+		{"/review/items/42/map", url.Values{"product_id": {"5"}}, repository.ErrProductNotFound, 404},
+	} {
+		e.ps.mapErr = c.err
+		if rec := e.do(http.MethodPost, c.path, c.form, false); rec.Code != c.code {
+			t.Errorf("%s %v: %d want %d", c.path, c.form, rec.Code, c.code)
+		}
 	}
 }
 

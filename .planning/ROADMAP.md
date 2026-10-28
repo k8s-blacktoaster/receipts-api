@@ -3,7 +3,7 @@
 - [x] **Phase 1: Schema & model hardening** - merchants/stores, line items, products/aliases, members, pipeline status, cents money (merged 2026-10-27, PR #1)
 - [x] **Phase 2: Upload + extraction pipeline** - photo upload, object store, queue, pluggable vision LLM (Grok default), validation
 - [x] **Phase 3: Mobile web UI** - camera capture, multi-photo, upload status, receipt list, review/edit
-- [ ] **Phase 4: Normalization & review** - product matching, alias learning, review endpoints
+- [x] **Phase 4: Normalization & review** - product matching, alias learning, review endpoints
 - [ ] **Phase 5: MCP server** - read-only tools over Streamable HTTP + auth
 - [ ] **Phase 6: Kubernetes deploy & backups** - CNPG, object store, secrets, ingress, restore drill
 
@@ -48,7 +48,7 @@ VPN-only, no chat. Multi-photo receipts deferred (one photo per upload).
 
 ### Phase 4: Normalization & review
 **Depends on**: Phase 2 (UI from Phase 3 consumes it)
-**Requirements**: NORM-01..NORM-03 (NORM-03: colliding aliases kept with item_number cleared, not dropped)
+**Requirements**: NORM-01..NORM-04 (NORM-03: colliding aliases kept with item_number cleared, not dropped; NORM-04: substring merchant/location check)
 **Success Criteria**: >=90% of lines with an item number/UPC auto-map; corrections create merchant-scoped aliases reused next time (pg_trgm fuzzy indexes land here)
 
 ### Phase 5: MCP server
@@ -60,7 +60,7 @@ trigram index from migration 006.
 
 ### Phase 6: Kubernetes deploy & backups
 **Depends on**: Phase 2 (can run in parallel with 3-5)
-**Requirements**: OPS-01..OPS-06 (OPS-03: UTF-8 locale/collation, or explicit collation in merchant_name_key)
+**Requirements**: OPS-01..OPS-07 (OPS-03: UTF-8 locale/collation, or explicit collation in merchant_name_key; OPS-07: memory limit + global pixel budget)
 **Plan notes** (mirror /Users/michael/_code/world-cup-site, read 2026-10-27):
   - `.github/workflows/build-api.yml`: on push to main (paths filter) + workflow_dispatch,
     `runs-on: [self-hosted, k3s]`, sha7 tag, `docker build --target test .` gate, build, push
@@ -78,6 +78,7 @@ trigram index from migration 006.
 columns) once every reader uses merchants/stores; paired down migration restores them.
 
 ## Decisions (2026-10-27, Jack via CoS)
+- Never edit a migration that has already been pushed; add a new one (from 013 on).
 - Rolling back 004 collapses status to review_state ('auto'/'needs_review'/'reviewed'); accepted, documented in 004 down.
 - Case-insensitive merchant matching/merging (e.g. in store_spending_view) is intended.
 - Legacy store_* columns kept for now; cleanup is Phase 7.

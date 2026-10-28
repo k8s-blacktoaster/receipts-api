@@ -51,6 +51,15 @@ type Members interface {
 type Merchants interface {
 	List(ctx context.Context) ([]models.Merchant, error)
 	Rename(ctx context.Context, id int64, newName string) (*models.Merchant, error)
+	Merge(ctx context.Context, from, into int64) (*repository.MergeResult, error)
+}
+
+// Products is the product catalog / review queue the UI needs (nil hides the review page).
+type Products interface {
+	ListReviewItems(ctx context.Context, limit, offset int) ([]models.ReviewItem, int, error)
+	SearchProducts(ctx context.Context, q string, limit int) ([]models.Product, error)
+	CreateProduct(ctx context.Context, p *models.Product) error
+	MapItem(ctx context.Context, itemID, productID int64, newProduct *models.Product) (*models.MapResult, error)
 }
 
 type Docs interface {
@@ -71,6 +80,7 @@ type UI struct {
 	Receipts  Receipts
 	Members   Members
 	Merchants Merchants
+	Products  Products
 	Docs      Docs
 	Blobs     Blobs
 	Uploads   Ingester
@@ -90,6 +100,7 @@ var funcs = template.FuncMap{
 		return fmt.Sprintf("%s%d.%02d", sign, c/100, c%100)
 	},
 	"qty":         func(q float64) string { return strconv.FormatFloat(q, 'f', -1, 64) },
+	"pct":         func(f *float64) string { return fmt.Sprintf("%.0f%%", *f*100) },
 	"statusLabel": func(s string) string { return strings.ReplaceAll(s, "_", " ") },
 	"pending":     func(s string) bool { return models.EditLocked(s) },
 	"editable":    func(s string) bool { return !models.EditLocked(s) },
@@ -108,7 +119,7 @@ func New(u UI) (*UI, error) {
 		u.MaxBytes = handlers.DefaultMaxUploadBytes
 	}
 	u.pages = map[string]*template.Template{}
-	for _, p := range []string{"list", "detail", "merchants", "member"} {
+	for _, p := range []string{"list", "detail", "merchants", "member", "review"} {
 		t, err := template.New("layout.html").Funcs(funcs).ParseFS(templateFS, "templates/layout.html", "templates/"+p+".html")
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", p, err)
@@ -136,6 +147,11 @@ func (u *UI) Register(r chi.Router) {
 		r.Post("/member", u.setMember)
 		r.Get("/merchants", u.merchants)
 		r.Post("/merchants/{id}/rename", u.rename)
+		r.Post("/merchants/{id}/merge", u.merge)
+		if u.Products != nil {
+			r.Get("/review", u.review)
+			r.Post("/review/items/{id}/map", u.mapItem)
+		}
 	})
 }
 
@@ -156,6 +172,24 @@ type page struct {
 	Receipt   *models.Receipt
 	Merchants []models.Merchant
 	Next      string
+	// MergeOffer is set when a rename collided: offer merging FromID into Into.
+	MergeOffer *mergeOffer
+	Review     []reviewRow
+	ReviewNav  *reviewNav
+	HasReview  bool
+}
+
+// reviewRow is one unmapped line plus candidate products for the picker.
+type reviewRow struct {
+	models.ReviewItem
+	Candidates []models.Product
+}
+
+type reviewNav struct{ Total, From, To, Prev, Next int }
+
+type mergeOffer struct {
+	FromID int64
+	Into   models.Merchant
 }
 
 func (u *UI) render(w http.ResponseWriter, r *http.Request, code int, name string, p *page) {
@@ -163,6 +197,7 @@ func (u *UI) render(w http.ResponseWriter, r *http.Request, code int, name strin
 		p.Member = u.currentMember(r)
 	}
 	p.Extract = u.Queue != nil
+	p.HasReview = u.Products != nil
 	if p.Msg == "" {
 		p.Msg = r.URL.Query().Get("msg")
 	}
@@ -498,8 +533,11 @@ func (u *UI) rename(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		redirectMsg(w, r, "/merchants", "Renamed to "+m.Name)
 	case errors.As(err, &conflict):
-		fail(http.StatusConflict, fmt.Sprintf("A merchant named %q already exists (#%d, %d receipts). Rename refused: merging merchants is not supported yet.",
-			conflict.Existing.Name, conflict.Existing.ID, conflict.Existing.ReceiptCount))
+		ms, _ := u.Merchants.List(r.Context())
+		u.render(w, r, http.StatusConflict, "merchants", &page{Title: "Merchants", Merchants: ms,
+			Err: fmt.Sprintf("A merchant named %q already exists (#%d, %d receipts). Rename refused; you can merge into it instead.",
+				conflict.Existing.Name, conflict.Existing.ID, conflict.Existing.ReceiptCount),
+			MergeOffer: &mergeOffer{FromID: id, Into: conflict.Existing}})
 	case errors.Is(err, repository.ErrInvalidMerchantName):
 		fail(http.StatusBadRequest, "The name must contain a letter or digit")
 	case errors.Is(err, repository.ErrNotFound):
@@ -508,4 +546,114 @@ func (u *UI) rename(w http.ResponseWriter, r *http.Request) {
 		u.Logger.Error("rename merchant", "error", err)
 		fail(http.StatusInternalServerError, "Could not rename")
 	}
+}
+
+func (u *UI) merge(w http.ResponseWriter, r *http.Request) {
+	fail := func(code int, msg string) {
+		ms, _ := u.Merchants.List(r.Context())
+		u.render(w, r, code, "merchants", &page{Title: "Merchants", Merchants: ms, Err: msg})
+	}
+	from, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	_ = r.ParseForm()
+	into, err2 := strconv.ParseInt(r.PostForm.Get("into_id"), 10, 64)
+	if err != nil || err2 != nil || from <= 0 || into <= 0 {
+		fail(http.StatusBadRequest, "Pick a merchant to merge into")
+		return
+	}
+	res, err := u.Merchants.Merge(r.Context(), from, into)
+	switch {
+	case err == nil:
+		redirectMsg(w, r, "/merchants", fmt.Sprintf("Merged into %s: %d receipts, %d stores, %d aliases moved",
+			res.Into.Name, res.Receipts, res.StoresMoved+res.StoresFolded, res.AliasesMoved))
+	case errors.Is(err, repository.ErrSelfMerge):
+		fail(http.StatusBadRequest, "A merchant cannot be merged into itself")
+	case errors.Is(err, repository.ErrNotFound):
+		fail(http.StatusNotFound, "Merchant not found")
+	case errors.Is(err, repository.ErrReceiptBusy):
+		fail(http.StatusConflict, "A receipt of this merchant is still being extracted; try again when it finishes")
+	case errors.Is(err, repository.ErrConcurrentUpdate):
+		fail(http.StatusConflict, "Another change was saving at the same time; try again")
+	default:
+		u.Logger.Error("merge merchant", "error", err)
+		fail(http.StatusInternalServerError, "Could not merge")
+	}
+}
+
+const reviewPageSize = 25
+
+func (u *UI) review(w http.ResponseWriter, r *http.Request) {
+	u.reviewWith(w, r, http.StatusOK, "")
+}
+
+func (u *UI) reviewWith(w http.ResponseWriter, r *http.Request, code int, errMsg string) {
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	if offset < 0 {
+		offset = 0
+	}
+	items, total, err := u.Products.ListReviewItems(r.Context(), reviewPageSize, offset)
+	if err != nil {
+		u.Logger.Error("review queue", "error", err)
+		u.render(w, r, http.StatusInternalServerError, "review", &page{Title: "Review products", Err: "Could not load the review queue"})
+		return
+	}
+	rows := make([]reviewRow, 0, len(items))
+	for _, it := range items {
+		row := reviewRow{ReviewItem: it}
+		q := it.Name
+		if it.RawText != "" {
+			q = it.RawText
+		}
+		if cands, err := u.Products.SearchProducts(r.Context(), q, 5); err == nil {
+			for _, c := range cands {
+				if it.SuggestedProductID == nil || c.ID != *it.SuggestedProductID {
+					row.Candidates = append(row.Candidates, c)
+				}
+			}
+		}
+		rows = append(rows, row)
+	}
+	nav := &reviewNav{Total: total, From: offset + 1, To: offset + len(items), Prev: -1, Next: -1}
+	if offset > 0 {
+		nav.Prev = max(0, offset-reviewPageSize)
+	}
+	if offset+len(items) < total {
+		nav.Next = offset + reviewPageSize
+	}
+	u.render(w, r, code, "review", &page{Title: "Review products", Review: rows, ReviewNav: nav, Err: errMsg})
+}
+
+func (u *UI) mapItem(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id <= 0 {
+		u.reviewWith(w, r, http.StatusBadRequest, "Invalid item id")
+		return
+	}
+	_ = r.ParseForm()
+	pid, _ := strconv.ParseInt(r.PostForm.Get("product_id"), 10, 64)
+	newName := strings.TrimSpace(r.PostForm.Get("new_name"))
+	var np *models.Product
+	switch {
+	case newName != "" && pid == 0:
+		np = &models.Product{CanonicalName: newName}
+		if err := np.Validate(); err != nil {
+			u.reviewWith(w, r, http.StatusBadRequest, err.Error())
+			return
+		}
+	case pid <= 0:
+		u.reviewWith(w, r, http.StatusBadRequest, "Pick a product or type a new product name")
+		return
+	}
+	res, err := u.Products.MapItem(r.Context(), id, pid, np)
+	if code, msg := handlers.MapItemError(err); code != 0 {
+		if code == http.StatusInternalServerError {
+			u.Logger.Error("map item", "error", err)
+		}
+		u.reviewWith(w, r, code, msg)
+		return
+	}
+	msg := "Mapped"
+	if res.AlsoMapped > 0 {
+		msg = fmt.Sprintf("Mapped, plus %d matching lines", res.AlsoMapped)
+	}
+	redirectMsg(w, r, "/review", msg)
 }

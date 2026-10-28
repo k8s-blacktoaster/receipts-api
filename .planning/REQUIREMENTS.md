@@ -29,9 +29,10 @@
 - [x] **UI-07** (phase 3): HEIC/HEIF accepted (magic bytes). Every upload is converted to ONE normalized JPEG (EXIF orientation applied, long edge <= 2000 px, q80, all EXIF/GPS stripped); only the JPEG is stored and used for extraction/UI. Dedupe hash = sha256 of the original bytes. `KEEP_ORIGINAL_UPLOADS` (default false) also keeps the original. HEIC decoded by the libheif CLI (container: libheif-tools). xAI accepts only JPEG/PNG.
 - [x] **ING-09** (phase 3): Extraction captures store number, street, city, state, zip, phone; upserted onto `stores` (city, region, postal_code) by the F6 key and linked; repeats dedupe.
 ### Normalization
-- [ ] **NORM-01**: Line items map to canonical products via merchant-scoped item number / UPC, then alias, then fuzzy/LLM suggestion
-- [ ] **NORM-02**: Unmapped/low-confidence lines appear in the review queue and are fixable
-- [ ] **NORM-03**: When merchants merge and aliases collide on (merchant, item_number), keep the colliding alias with item_number cleared (do not drop it); revisit the 006 backfill behaviour here
+- [x] **NORM-01**: Line items map to canonical products via merchant-scoped item number / UPC, then alias, then fuzzy/LLM suggestion
+- [x] **NORM-02**: Unmapped/low-confidence lines appear in the review queue and are fixable
+- [x] **NORM-04** (phase 4, from phase 3 golden run): the merchant sanity check also flags names that CONTAIN the store city or street (token/substring match on normalized keys), e.g. "Safeway Oakland" or "Target 123 Main St", not only exact matches.
+- [x] **NORM-03**: When merchants merge and aliases collide on (merchant, item_number), keep the colliding alias with item_number cleared (do not drop it); revisit the 006 backfill behaviour here
 ### MCP
 - [ ] **MCP-01**: Streamable HTTP MCP endpoint with read-only tools (search, where-bought, spend, price history)
 - [ ] **MCP-02**: Every answer returns receipt ids/dates so results are verifiable
@@ -45,6 +46,7 @@
 - [ ] **OPS-04**: CI mirrors world-cup-site: `.github/workflows/build-api.yml` on `runs-on: [self-hosted, k3s]` (host Docker), `docker build --target test .` gates the job (go vet + go test in the image, no DB/live LLM), then `docker build` and `docker push registry.k8s.blacktoaster.com/receipts/api:<sha7>` (immutable sha7 tag, `GITHUB_SHA::7`); step summary says which `api.tag` to bump. Dockerfile gains a `test` stage.
 - [ ] **OPS-05**: Helm chart (like world-cup-site/helm): `ExternalSecret` (external-secrets.io/v1beta1) with `secretStoreRef: {name: vault-backend, kind: ClusterSecretStore}`, `remoteRef.key: apps/receipts/app`, properties `xai-api-key` (-> secret key mapped to env `XAI_API_KEY` via secretKeyRef) and `db-password`; refreshInterval 1m, creationPolicy Owner. No secrets in values.yaml.
 - [ ] **OPS-06**: cert-manager `Certificate` issued by ClusterIssuer `vault-issuer` (commonName/dnsNames = host, secretName = ingress TLS secret) and an nginx `Ingress` (ssl-redirect, optional external-dns target) referencing that secret; single backend service (API + embedded UI). VPN-only exposure.
+- [ ] **OPS-07** (phase 6, from phase 3 QA): parallel 8-bit 7000x7000 uploads still peak at ~1.9 GB RSS with the 2-way normalization semaphore. Set a k8s memory limit on the API pod and add a global in-flight pixel/byte budget (weighted by decoded size) instead of a plain count.
 - [ ] **OPS-03**: Postgres must use a UTF-8 locale/collation (not "C"), or merchant_name_key() must use an explicit collation (e.g. ICU "und-x-icu"), so SQL lower() matches Go for non-ASCII merchant names
 
 ## v2 Requirements

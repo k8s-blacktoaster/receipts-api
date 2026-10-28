@@ -89,7 +89,7 @@ func Apply(r *models.Receipt, e *Extracted) {
 		}
 		item := models.ReceiptItem{
 			LineNo: &line, RawText: str(it.RawText), Name: name,
-			SKU: str(it.SKU), ItemNumber: str(it.ItemNumber), UPC: str(it.UPC),
+			SKU: str(it.SKU), ItemNumber: str(it.ItemNumber), UPC: models.CleanUPC(str(it.UPC)),
 			Quantity: qty, Unit: str(it.Unit),
 			UnitPriceCents: i64(it.UnitPriceCents), LineTotalCents: i64(it.LineTotalCents),
 			DiscountCents: abs(i64(it.DiscountCents)), TaxFlag: str(it.TaxFlag), IsReturn: isReturn,
