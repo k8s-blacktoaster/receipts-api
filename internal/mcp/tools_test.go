@@ -178,3 +178,31 @@ func TestToolResultsCarryReceiptIDs(t *testing.T) {
 	}
 }
 
+func TestArgumentValidation(t *testing.T) {
+	fq := &fakeQuery{}
+	for name, args := range map[string]string{
+		"year 0 from":   `["search_purchases", {"query":"x","from":"0000-01-01"}]`,
+		"year 0 to":     `["spend", {"to":"0000-12-31"}]`,
+		"NUL query":     `["search_purchases", {"query":"cof\u0000fee"}]`,
+		"NUL merchant":  `["spend", {"merchant":"tj\u0000s"}]`,
+		"NUL product q": `["search_products", {"query":"\u0000"}]`,
+		"case key":      `["search_purchases", {"Query":"x"}]`,
+		"case key 2":    `["price_history", {"product_id":1,"MERCHANT":"x"}]`,
+		"case group_by": `["spend", {"Group_By":"month"}]`,
+		"not object":    `["spend", [1]]`,
+	} {
+		var pair [2]json.RawMessage
+		if err := json.Unmarshal([]byte(args), &pair); err != nil {
+			t.Fatal(name, err)
+		}
+		var tool string
+		_ = json.Unmarshal(pair[0], &tool)
+		out, isErr := call(t, fq, tool, string(pair[1]))
+		if msg, _ := out["error"].(string); !isErr || msg == "" || msg == "internal error" {
+			t.Errorf("%s: want validation error, got %v", name, out)
+		}
+	}
+	if out, isErr := call(t, fq, "search_purchases", `{"query":"x","from":"0001-01-01"}`); isErr {
+		t.Errorf("year 1 rejected %v", out)
+	}
+}

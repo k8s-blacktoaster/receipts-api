@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -61,11 +62,36 @@ func Tools(d Deps) []Tool {
 
 func bad(format string, a ...any) error { return &ToolError{Message: fmt.Sprintf(format, a...)} }
 
+// decodeArgs decodes tool arguments strictly: keys must match the json tags exactly
+// (encoding/json alone matches case-insensitively), unknown keys are rejected, and strings
+// may not contain NUL (Postgres text cannot hold it).
 func decodeArgs(raw json.RawMessage, v any) error {
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		return bad("arguments must be a JSON object")
+	}
+	allowed := map[string]bool{}
+	rt := reflect.TypeOf(v).Elem()
+	for i := 0; i < rt.NumField(); i++ {
+		if tag, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ","); tag != "" {
+			allowed[tag] = true
+		}
+	}
+	for k := range keys {
+		if !allowed[k] {
+			return bad("unknown argument %q", k)
+		}
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		return bad("invalid arguments: %v", err)
+	}
+	rv := reflect.ValueOf(v).Elem()
+	for i := 0; i < rv.NumField(); i++ {
+		if f := rv.Field(i); f.Kind() == reflect.String && strings.ContainsRune(f.String(), 0) {
+			return bad("%s must not contain NUL bytes", rt.Field(i).Tag.Get("json"))
+		}
 	}
 	return nil
 }
@@ -74,8 +100,9 @@ func checkDate(name, s string) error {
 	if s == "" {
 		return nil
 	}
-	if _, err := time.Parse("2006-01-02", s); err != nil {
-		return bad("%s must be YYYY-MM-DD", name)
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil || t.Year() < 1 {
+		return bad("%s must be a YYYY-MM-DD date from year 0001", name)
 	}
 	return nil
 }
