@@ -2,7 +2,8 @@
 
 **Milestone:** v1.0
 **Current phase:** 1 - Schema & model hardening
-**Status:** bootstrapped (hand-written; GSD installer not run)
+**Status:** executed, awaiting verify (/gsd-verify-work 1); next: discuss phase 2
+**Last updated:** 2026-10-27
 
 ## Notes
 - .planning/ created by hand following the gsd-core layout (PROJECT, REQUIREMENTS,
