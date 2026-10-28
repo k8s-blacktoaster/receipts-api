@@ -1,8 +1,8 @@
 # State
 
 **Milestone:** v1.0
-**Current phase:** 1 - Schema & model hardening
-**Status:** executed, awaiting QA verify (/gsd-verify-work 1); phase 2 on hold until QA reports
+**Current phase:** 2 - Upload + extraction pipeline
+**Status:** phase 1 merged (PR #1); phase 2 executed on phase-02-upload-extraction, PR open, awaiting QA verify
 **Last updated:** 2026-10-27
 
 ## Notes
@@ -17,3 +17,6 @@
 - 2026-10-27 QA follow-ups F1-F7 done: migration 005 (merchant trim dedupe, money CHECKs,
   store/merchant composite FK, FK indexes, store address upsert, store_name nullable + views
   read merchant/store); `migrate up -steps N`. Awaiting QA re-verify; phase 2 still on hold.
+- 2026-10-27 phase 1 merged to main (PR #1). Phase 2 carried over from local WIP onto
+  phase-02-upload-extraction: migration 007, uploads, extraction provider (xAI default,
+  Anthropic stub), pipeline/worker, docs. See 02-01-SUMMARY.md.
