@@ -186,7 +186,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "Update an existing receipt's information. Omitting \"status\" (or sending the current one)\nkeeps it; a change must follow the status transition table (e.g. parsed -\u003e reviewed),\notherwise 409 and the receipt is left unchanged. \"parsing\" is only set by the extraction worker.",
+                "description": "Update an existing receipt's information. Omitting \"status\" (or sending the current one)\nkeeps it. Users may only make review moves: parsed -\u003e needs_review|reviewed, needs_review -\u003e reviewed,\nfailed -\u003e reviewed, reviewed -\u003e needs_review. Anything else (e.g. to parsing, failed or uploaded) is 409.\nWhile the receipt is \"parsing\" every PUT is 409. On 409 the receipt is left unchanged.",
                 "consumes": [
                     "application/json"
                 ],
@@ -235,7 +235,7 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "Invalid status transition",
+                        "description": "Invalid status transition, or receipt is being parsed",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }

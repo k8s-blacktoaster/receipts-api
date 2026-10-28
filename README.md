@@ -95,7 +95,7 @@ The API includes a complete Receipts CRUD API:
 | GET | `/api/v1/receipts` | List all receipts |
 | GET | `/api/v1/receipts/{id}` | Get a single receipt |
 | POST | `/api/v1/receipts` | Create a new receipt |
-| PUT | `/api/v1/receipts/{id}` | Update an existing receipt; omitted or unchanged `status` is kept, a status change must follow the transition table (409 otherwise, receipt unchanged; 400 for unknown values) |
+| PUT | `/api/v1/receipts/{id}` | Update an existing receipt; omitted or unchanged `status` is kept; users may only make review moves (parsed -> needs_review/reviewed, needs_review -> reviewed, failed -> reviewed, reviewed -> needs_review), anything else is 409; every PUT while `parsing` is 409; 400 for unknown values |
 | DELETE | `/api/v1/receipts/{id}` | Delete a receipt |
 | POST | `/api/v1/uploads` | Upload a receipt photo (multipart `image`, JPEG/PNG, max 20 MiB); 202 + queued extraction, 200 if the same image was already uploaded |
 | POST | `/api/v1/receipts/{id}/extract` | Re-run extraction for a photo receipt; 409 while parsing and always 409 for `reviewed` receipts (no force option in v1) |
@@ -119,10 +119,18 @@ Uploads are validated before anything is written: the image must fully decode as
 otherwise). Provider errors are redacted (API key, `Authorization`/`Bearer` values) before they
 are stored in `parse_error`, logged, or returned.
 
+Each claim stores a token (its exact `parse_started_at`). The worker's final write (fields,
+items, status), a failure, or a release only applies while the row is still `parsing` under that
+token, so a reset/re-claimed receipt or a racing edit is never overwritten. User edits are
+refused (409) while a receipt is `parsing`.
+
 On SIGTERM the server stops accepting HTTP requests and extraction jobs, waits up to
 `EXTRACTION_SHUTDOWN_TIMEOUT` seconds (default 25) for in-flight provider calls, then cancels
-them. On the next start, receipts left `parsing` longer than the job timeout are reset to
-`uploaded` and requeued with everything else still `uploaded`.
+them; a cancelled job puts its own receipt back to `uploaded` (best-effort, short background
+context). As a backstop, at startup and every `EXTRACTION_STALE_SWEEP_INTERVAL` seconds
+(default 60, 0 = off) receipts `parsing` longer than the job timeout + 30s grace are reset to
+`uploaded`, and everything `uploaded` is requeued. Credentials in errors are always replaced by
+the literal `[REDACTED]`.
 
 Rolling back migration 007 deletes receipts that were never parsed but leaves their image files
 in `UPLOAD_DIR` (orphaned; remove by hand).
@@ -229,6 +237,7 @@ EXTRACTION_PROVIDER=xai   # xai | anthropic | none
 EXTRACTION_MODEL=         # default grok-4.20
 XAI_API_KEY=              # never commit
 EXTRACTION_SHUTDOWN_TIMEOUT=25  # seconds SIGTERM waits for in-flight extractions
+EXTRACTION_STALE_SWEEP_INTERVAL=60  # seconds between stale-parsing sweeps (0 = off)
 ```
 
 ### Testing

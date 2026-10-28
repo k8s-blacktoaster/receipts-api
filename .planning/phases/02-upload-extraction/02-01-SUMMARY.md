@@ -53,3 +53,13 @@ Tests now: 59 pass, 0 fail (`go test -race -p 1` with TEST_DATABASE_URL on throw
 
 ### QA round 2: PUT status
 `PUT /api/v1/receipts/{id}` now routes status changes through the transition table (`receiptRepo.Update` locks the row with `SELECT ... FOR UPDATE`, rejects invalid moves with `ErrInvalidTransition`; handler returns 409 "Invalid status transition from X to Y; receipt unchanged"). Omitted status keeps the current one (it used to reset to the default); same status is allowed; `parsing` can only be entered via `ClaimForParsing`; unknown values stay 400. Tests: `TestUpdateReceiptStatusTransitions` (handler: valid, omitted, same, reviewed->uploaded 409, ->parsing 409, bogus 400) and `TestUpdateRoutesStatusThroughTransitionTable` (Postgres: rejected updates leave the row unchanged). Closes the PUT gap noted above. Tests: 61 pass, 0 fail.
+
+### QA round 3 (re-QA at de4fc5d)
+| Finding | Fix | Test |
+|---|---|---|
+| MAJOR 1 stuck in parsing | Claim token = exact `parse_started_at` (`clock_timestamp()`). Cancelled job (shutdown timeout / ctx cancel) calls `ReleaseClaim` (parsing -> uploaded only if still its claim) on a 5s background context. `Queue.Recover` (reset parsing older than job timeout + 30s grace, requeue all uploaded) runs at startup and every `EXTRACTION_STALE_SWEEP_INTERVAL` (default 60s). | `TestShutdownTimeoutReleasesAndRestartReprocesses` (12s jobs, 2s shutdown timeout, restart reprocesses, re-extract works), `TestReleaseClaimTokenAndPeriodicSweep`, `TestPipelineCancelledJobReleasesClaim`, `TestExtractionSweepInterval` |
+| MAJOR 2 lost update | PUT while `parsing` -> 409 for any body (`ErrReceiptBusy`). Worker final write is one `CompleteParse` tx conditional on `status='parsing'` + own token (`FailParse` likewise); otherwise `ErrClaimLost` and the result is discarded. | `TestPutWhileParsingIsRefused`, `TestReleaseClaimTokenAndPeriodicSweep` (old token can't complete/fail/release), `TestPipelineClaimLostDiscardsResult`, `TestUpdateRoutesStatusThroughTransitionTable` |
+| Minor: user vs worker transitions | `models.UserCanTransition`: parsed -> needs_review/reviewed, needs_review -> reviewed, failed -> reviewed, reviewed -> needs_review. PUT can't enter/leave parsing, set failed or uploaded. | `TestUserTransitions`, `TestUpdateReceiptStatusTransitions` |
+| Minor: redaction format | Every credential becomes exactly `[REDACTED]` (scheme dropped, no double masks). | `TestRedact`, `TestRedactConsistentMarker` |
+
+Tests now: 69 pass, 0 fail (`go test -race -p 1`, PG 55432).
