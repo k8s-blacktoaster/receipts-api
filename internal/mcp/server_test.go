@@ -97,8 +97,12 @@ func TestProtocol(t *testing.T) {
 		`{"jsonrpc":"2.0","id":4,"method":"nope"}`:                             codeMethodNotFound,
 		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"x"}}`: codeInvalidParams,
 		`{bad`: codeParse,
-		`[{"jsonrpc":"2.0","id":1,"method":"ping"}]`: codeInvalidRequest,
-		`{"jsonrpc":"1.0","id":1,"method":"ping"}`:   codeInvalidRequest,
+		`[{"jsonrpc":"2.0","id":1,"method":"ping"}]`:     codeInvalidRequest,
+		`{"jsonrpc":"1.0","id":1,"method":"ping"}`:       codeInvalidRequest,
+		`{"jsonrpc":"2.0","id":null,"method":"ping"}`:    codeInvalidRequest,
+		`{"jsonrpc":"2.0","id":{"a":1},"method":"ping"}`: codeInvalidRequest,
+		`{"jsonrpc":"2.0","id":[1],"method":"ping"}`:     codeInvalidRequest,
+		`{"jsonrpc":"2.0","id":true,"method":"ping"}`:    codeInvalidRequest,
 	} {
 		m := decode(t, post(t, h, body, nil))
 		if e, _ := m["error"].(map[string]any); e == nil || e["code"] != code {

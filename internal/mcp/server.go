@@ -107,6 +107,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
+	if !validID(req.ID) { // MCP: id must be a string or integer, never null
+		writeJSON(w, rpcResponse{JSONRPC: "2.0", ID: json.RawMessage("null"),
+			Error: &rpcError{codeInvalidRequest, "id must be a string or number"}})
+		return
+	}
 	result, rerr := s.dispatch(r.Context(), req)
 	resp := rpcResponse{JSONRPC: "2.0", ID: req.ID}
 	if rerr != nil {
@@ -115,6 +120,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		resp.Result = result
 	}
 	writeJSON(w, resp)
+}
+
+func validID(id json.RawMessage) bool {
+	var v any
+	if json.Unmarshal(id, &v) != nil {
+		return false
+	}
+	switch v.(type) {
+	case string, float64:
+		return true
+	}
+	return false
 }
 
 func idOrNull(id json.RawMessage) json.RawMessage {
