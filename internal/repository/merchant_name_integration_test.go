@@ -48,13 +48,16 @@ func TestMerchantBackfillDisplayName(t *testing.T) {
 	for _, q := range []string{
 		// simulate legacy duplicates that pre-date the unique key
 		`DROP INDEX merchants_name_uniq`,
-		// frequency beats casing: COSTCO printed on 2 receipts, Costco on 1
+		// mixed case beats frequency: COSTCO printed on 3 receipts, Costco on 1
 		`INSERT INTO merchants (id, name) VALUES (801, 'costco'), (802, 'Costco'), (803, 'COSTCO')`,
-		`INSERT INTO receipts (store_name, date, merchant_id) VALUES ('COSTCO','2026-01-01',801), ('COSTCO','2026-01-02',803), ('Costco','2026-01-03',802)`,
+		`INSERT INTO receipts (store_name, date, merchant_id) VALUES ('COSTCO','2026-01-01',801), ('COSTCO','2026-01-02',803), ('COSTCO','2026-01-02',803), ('Costco','2026-01-03',802)`,
+		// among mixed-case variants the most frequent wins
+		`INSERT INTO merchants (id, name) VALUES (851, 'HOME DEPOT'), (852, 'HOME Depot')`,
+		`INSERT INTO receipts (store_name, date, merchant_id) VALUES ('HOME DEPOT','2026-01-01',851), ('HOME DEPOT','2026-01-01',851), ('HOME DEPOT','2026-01-01',851), ('Home Depot','2026-01-01',851), ('Home  Depot','2026-01-01',851), ('HOME Depot','2026-01-01',852)`,
 		// tie (1 vote each): mixed case wins over all-lower
 		`INSERT INTO merchants (id, name) VALUES (811, 'trader joes'), (812, 'Trader Joes')`,
 		`INSERT INTO receipts (store_name, date, merchant_id) VALUES ('trader joes','2026-01-01',811), ('Trader  Joes','2026-01-02',812)`,
-		// no receipts, no mixed-case variant: keep an existing variant (never invent casing)
+		// no mixed-case variant anywhere: initcap of the collapsed name
 		`INSERT INTO merchants (id, name) VALUES (841, 'whole foods'), (842, 'WHOLE  FOODS')`,
 		// internal-whitespace variant + duplicate store number merges
 		`INSERT INTO merchants (id, name) VALUES (821, 'Sprouts  Market'), (822, 'sprouts market')`,
@@ -75,12 +78,13 @@ func TestMerchantBackfillDisplayName(t *testing.T) {
 			t.Fatalf("merchant %d = %q (%v), want %q", id, name, err, want)
 		}
 	}
-	check(801, "COSTCO")
+	check(801, "Costco")
 	check(811, "Trader Joes")
-	check(841, "whole foods")
+	check(841, "Whole Foods")
 	check(821, "Sprouts Market")
+	check(851, "Home Depot")
 	var n, sid int
-	db.QueryRow(`SELECT count(*) FROM merchants WHERE id IN (802,803,812,822,842)`).Scan(&n)
+	db.QueryRow(`SELECT count(*) FROM merchants WHERE id IN (802,803,812,822,842,852)`).Scan(&n)
 	db.QueryRow(`SELECT store_id FROM receipts WHERE store_name = 'Sprouts Market'`).Scan(&sid)
 	if n != 0 || sid != 831 {
 		t.Fatalf("merge incomplete: leftover=%d store=%d", n, sid)
@@ -121,6 +125,34 @@ func TestQAReproLegacyStoreNameVariants(t *testing.T) {
 	db.QueryRow(`SELECT count(*) FROM receipts r LEFT JOIN merchants m ON m.id = r.merchant_id WHERE m.id IS NULL`).Scan(&orphans)
 	if orphans != 0 {
 		t.Fatalf("%d receipts lost their merchant", orphans)
+	}
+}
+
+// CoS rule on legacy data: mixed case beats count; no mixed case -> initcap.
+func TestLegacyMixedCaseBeatsCountAndInitcap(t *testing.T) {
+	db := testDB(t)
+	migrateTo(t, db, 2)
+	for _, name := range []string{"COSTCO", "COSTCO", "COSTCO", "Costco", "whole foods", "WHOLE  FOODS"} {
+		if _, err := db.Exec(`INSERT INTO receipts (store_name, date, subtotal) VALUES ($1, '2025-01-01', 1.00)`, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.RunMigrations(db, "../../migrations"); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	rows, err := db.Query(`SELECT name FROM merchants ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n string
+		rows.Scan(&n)
+		got = append(got, n)
+	}
+	if len(got) != 2 || got[0] != "Costco" || got[1] != "Whole Foods" {
+		t.Fatalf("merchants = %q, want [Costco Whole Foods]", got)
 	}
 }
 

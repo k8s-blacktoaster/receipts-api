@@ -11,10 +11,12 @@ UPDATE merchants SET name = regexp_replace(btrim(name), '\s+', ' ', 'g')
 CREATE TEMP TABLE _merchant_map ON COMMIT DROP AS
 SELECT id, min(id) OVER (PARTITION BY lower(name)) AS keep_id FROM merchants;
 
--- Display name per merged group: chosen only among existing variants, i.e. the legacy
--- receipts.store_name values (whitespace-collapsed, one vote per receipt). Merchant rows'
--- own names are a zero-vote fallback for merchants with no receipts. Ranking: most votes;
--- tie -> mixed case (not all-caps, not all-lower); tie -> earliest merchant id; tie -> name.
+-- Display name per merged group, from the legacy receipts.store_name variants (whitespace-
+-- collapsed, one vote per receipt; merchant rows' own names are zero-vote fallbacks):
+--   1. any mixed-case variant beats ALL-CAPS / all-lower regardless of votes;
+--      among mixed-case variants the most votes wins (tie -> earliest merchant id, then name);
+--   2. if no mixed-case variant exists, use initcap() of the top variant ('Whole Foods').
+-- (006 was edited in place before release; only test databases had run the earlier version.)
 CREATE TEMP TABLE _merchant_display ON COMMIT DROP AS
 SELECT DISTINCT ON (keep_id) keep_id, name
 FROM (
@@ -29,7 +31,8 @@ FROM (
     ) c
     GROUP BY keep_id, name
 ) v
-ORDER BY keep_id, votes DESC, (name <> lower(name) AND name <> upper(name)) DESC, src_id, name;
+ORDER BY keep_id, (name <> lower(name) AND name <> upper(name)) DESC, votes DESC, src_id, name;
+UPDATE _merchant_display SET name = initcap(name) WHERE name = lower(name) OR name = upper(name);
 
 DELETE FROM _merchant_map WHERE id = keep_id;
 -- receipts on a duplicate store: move store + merchant together (composite FK)
