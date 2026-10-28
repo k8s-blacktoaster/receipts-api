@@ -64,3 +64,13 @@
 - Tests: TestLegacyMixedCaseBeatsCountAndInitcap (3x COSTCO + 1x Costco -> Costco; whole foods /
   WHOLE  FOODS -> Whole Foods), TestMerchantBackfillDisplayName (updated), TestMerchantInitcapUpgradeNoFlipFlop.
 - 18/18 repository integration tests pass; pg_dump -s identical after down 2 / up.
+
+## 006 final naming iteration (QA major at a046b33; 006 edited in place, unreleased)
+- Bug: the repo treated any initcap()-equal name as machine-made, so 'Trader Joes' was overwritten by 'Trader joes'.
+- Fix: merchants.name_is_derived BOOLEAN NOT NULL DEFAULT false (down drops it). 006 sets it true
+  only for the initcap fallback / all-lower / ALL-CAPS choices. Repo upgrades a name only while
+  derived and only with a mixed-case spelling (clears the flag); new merchants are derived iff
+  all-lower or ALL-CAPS. Initcap-equality heuristic removed.
+- Tests: TestMixedCaseStoredNameNeverOverwritten (QA repro), TestNewMerchantDerivedFlag,
+  TestMerchantBackfillDisplayName (asserts flags), TestMerchantInitcapUpgradeNoFlipFlop (flag-based setup).
+- 20/20 repository integration tests pass; pg_dump -s identical after down 2 / up.
