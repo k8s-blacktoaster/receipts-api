@@ -348,12 +348,18 @@ func (u *UI) approve(w http.ResponseWriter, r *http.Request) {
 		redirectMsg(w, r, "/receipts/"+strconv.Itoa(rc.ID), "Already reviewed")
 		return
 	}
+	if err := rc.ReadyForReview(); err != nil {
+		u.detailError(w, r, http.StatusBadRequest, "Can't approve yet: "+err.Error()+" (edit and save first)")
+		return
+	}
 	err := u.Receipts.SetStatus(r.Context(), rc.ID, models.StatusReviewed, "", memberID(u.currentMember(r)))
 	switch {
 	case err == nil:
 		redirectMsg(w, r, "/receipts/"+strconv.Itoa(rc.ID), "Approved: marked reviewed")
 	case errors.Is(err, repository.ErrInvalidTransition):
 		u.detailError(w, r, http.StatusConflict, "Can't approve from status "+rc.Status+" (it changed meanwhile?); refresh and try again")
+	case errors.Is(err, repository.ErrIncomplete):
+		u.detailError(w, r, http.StatusBadRequest, "Can't approve yet: the receipt needs a store name and a date (edit and save first)")
 	default:
 		u.Logger.Error("approve", "error", err)
 		u.detailError(w, r, http.StatusInternalServerError, "Could not approve")
@@ -448,9 +454,20 @@ func (u *UI) setMember(w http.ResponseWriter, r *http.Request) {
 }
 
 // safeNext only allows local paths for post-picker redirects.
+// safeNext allows only a local path: one leading '/', no "//" anywhere, no backslashes, no
+// control characters or spaces, and no scheme/host once parsed. Anything else -> /receipts.
 func safeNext(n string) string {
-	if !strings.HasPrefix(n, "/") || strings.HasPrefix(n, "//") || strings.Contains(n, "\\") {
-		return "/receipts"
+	const fallback = "/receipts"
+	if len(n) == 0 || len(n) > 2048 || n[0] != '/' || strings.Contains(n, "//") || strings.Contains(n, "\\") {
+		return fallback
+	}
+	for _, c := range n {
+		if c < 0x21 || c == 0x7f || (c >= 0x80 && c <= 0x9f) {
+			return fallback
+		}
+	}
+	if u, err := url.Parse(n); err != nil || u.Scheme != "" || u.Host != "" || u.User != nil {
+		return fallback
 	}
 	return n
 }

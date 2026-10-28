@@ -20,6 +20,15 @@ var ErrNotFound = errors.New("receipt not found")
 // (or the receipt changed status concurrently).
 var ErrInvalidTransition = errors.New("invalid receipt status transition")
 
+// ErrIncomplete: the receipt lacks a merchant or date, which parsed/reviewed require
+// (CHECK receipts_complete_when_parsed).
+var ErrIncomplete = errors.New("receipt needs a merchant and a date for this status")
+
+func isIncomplete(err error) bool {
+	var pe *pq.Error
+	return errors.As(err, &pe) && pe.Constraint == "receipts_complete_when_parsed"
+}
+
 // ErrReceiptBusy is returned by edits while the receipt is queued for or undergoing
 // extraction (uploaded|parsing), and by Delete while parsing.
 var ErrReceiptBusy = errors.New("receipt is queued for or undergoing extraction")
@@ -450,6 +459,9 @@ func (r *receiptRepo) SetStatus(ctx context.Context, id int, status, parseError 
 			reviewed_at = CASE WHEN $2 = 'reviewed' THEN now() ELSE reviewed_at END,
 			reviewed_by_id = CASE WHEN $2 = 'reviewed' THEN $4 ELSE reviewed_by_id END
 		WHERE id = $1 AND status = ANY($5)`, id, status, nullStr(parseError), reviewerID, pq.Array(from))
+	if isIncomplete(err) {
+		return ErrIncomplete
+	}
 	if err != nil {
 		return fmt.Errorf("failed to set status: %w", err)
 	}
