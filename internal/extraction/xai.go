@@ -26,6 +26,44 @@ type XAIProvider struct {
 	APIKey  string // from XAI_API_KEY only; never logged
 	model   string
 	HTTP    *http.Client
+	// ReasoningEffort is the requested reasoning_effort ("" = model default). It is only sent
+	// when SupportsReasoningEffort(model, effort); see SentReasoningEffort.
+	ReasoningEffort string
+}
+
+// reasoningEfforts lists the reasoning_effort values each xAI model family accepts (docs.x.ai,
+// Oct 2026). grok-4.20 (reasoning and non-reasoning) does not take the parameter.
+var reasoningEfforts = []struct {
+	prefix  string
+	efforts []string
+}{
+	{"grok-4.3", []string{"none", "low", "medium", "high", "xhigh"}},
+	{"grok-4.5", []string{"low", "medium", "high"}},
+	{"grok-4.6", []string{"low", "medium", "high", "xhigh"}},
+	{"grok-4.7", []string{"low", "medium", "high", "xhigh"}},
+}
+
+// SupportsReasoningEffort reports whether model accepts reasoning_effort=effort.
+func SupportsReasoningEffort(model, effort string) bool {
+	model = strings.ToLower(model)
+	for _, f := range reasoningEfforts {
+		if model == f.prefix || strings.HasPrefix(model, f.prefix+"-") {
+			for _, e := range f.efforts {
+				if e == effort {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// SentReasoningEffort is the reasoning_effort actually sent ("" = not sent).
+func (p *XAIProvider) SentReasoningEffort() string {
+	if p.ReasoningEffort != "" && SupportsReasoningEffort(p.model, p.ReasoningEffort) {
+		return p.ReasoningEffort
+	}
+	return ""
 }
 
 func NewXAIProvider(baseURL, apiKey, model string, timeout time.Duration) (*XAIProvider, error) {
@@ -39,7 +77,7 @@ func NewXAIProvider(baseURL, apiKey, model string, timeout time.Duration) (*XAIP
 		model = DefaultXAIModel
 	}
 	if timeout <= 0 {
-		timeout = 120 * time.Second
+		timeout = 300 * time.Second
 	}
 	redact.Register(apiKey)
 	return &XAIProvider{BaseURL: strings.TrimRight(baseURL, "/"), APIKey: apiKey, model: model, HTTP: &http.Client{Timeout: timeout}}, nil
@@ -53,6 +91,8 @@ type chatRequest struct {
 	Messages       []chatMessage  `json:"messages"`
 	ResponseFormat map[string]any `json:"response_format"`
 	Temperature    float64        `json:"temperature"`
+	// ReasoningEffort is omitted unless the model supports it.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 type chatMessage struct {
@@ -99,7 +139,8 @@ func (p *XAIProvider) BuildRequest(images []Image) chatRequest {
 		},
 		ResponseFormat: map[string]any{"type": "json_schema", "json_schema": map[string]any{
 			"name": "receipt", "strict": true, "schema": ReceiptJSONSchema()}},
-		Temperature: 0,
+		Temperature:     0,
+		ReasoningEffort: p.SentReasoningEffort(),
 	}
 }
 

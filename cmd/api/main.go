@@ -100,13 +100,22 @@ func main() {
 		os.Exit(1)
 	}
 	provider, err := extraction.NewProvider(extraction.Config{
-		Provider: cfg.ExtractionProvider, Model: cfg.ExtractionModel, XAIAPIKey: cfg.XAIAPIKey,
+		Provider: cfg.ExtractionProvider, Model: cfg.ExtractionModel, ReasoningEffort: cfg.ExtractionReasoningEffort,
+		XAIAPIKey:  cfg.XAIAPIKey,
 		XAIBaseURL: cfg.XAIBaseURL, Timeout: time.Duration(cfg.ExtractionTimeoutSec) * time.Second,
 	})
 	if err != nil {
 		// uploads still work; receipts stay "uploaded" until a provider is configured
 		logger.Warn("extraction disabled", "reason", redact.String(err.Error()))
 		provider = nil
+	}
+	if xp, ok := provider.(*extraction.XAIProvider); ok {
+		if cfg.ExtractionReasoningEffort != "" && xp.SentReasoningEffort() == "" {
+			logger.Warn("EXTRACTION_REASONING_EFFORT not supported by model; not sent",
+				"model", xp.Model(), "effort", cfg.ExtractionReasoningEffort)
+		}
+		logger.Info("extraction provider", "model", xp.Model(), "reasoning_effort", xp.SentReasoningEffort(),
+			"timeout_s", cfg.ExtractionTimeoutSec)
 	}
 	workerCtx, stopWorkers := context.WithCancel(context.Background())
 	defer stopWorkers()
