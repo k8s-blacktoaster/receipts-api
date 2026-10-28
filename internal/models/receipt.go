@@ -292,3 +292,11 @@ type UploadResult struct {
 	Status           string `json:"status"`
 	Duplicate        bool   `json:"duplicate"`
 }
+
+// Merchant is a normalized merchant (Name is the NormalizeMerchantName key).
+type Merchant struct {
+	ID           int64  `json:"id"`
+	Name         string `json:"name"`
+	Category     string `json:"category,omitempty"`
+	ReceiptCount int    `json:"receipt_count"`
+}

@@ -74,7 +74,10 @@ type txExec interface {
 
 // resolveMerchantStore finds or creates the merchant (by models.NormalizeMerchantName key) and,
 // when a store number or address is given, the store location.
-func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt) error {
+// resolveMerchantStore links the receipt to merchant/store. With keepMerchant (an edit that did
+// not change the printed store name) the existing merchant_id is kept, so a merchant renamed in
+// the UI is not re-derived from the printed name.
+func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt, keepMerchant bool) error {
 	r.StoreName = strings.TrimSpace(r.StoreName) // as printed (legacy receipts.store_name)
 	r.StoreNumber = strings.TrimSpace(r.StoreNumber)
 	r.StoreAddress = strings.TrimSpace(r.StoreAddress)
@@ -85,12 +88,15 @@ func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt) erro
 		r.MerchantID, r.StoreID = 0, nil
 		return nil
 	}
-	err := q.QueryRowContext(ctx, `
+	var err error
+	if !(keepMerchant && r.MerchantID != 0) {
+		err = q.QueryRowContext(ctx, `
 		INSERT INTO merchants (name, category) VALUES ($1, $2)
 		ON CONFLICT (name) DO UPDATE SET category = COALESCE(merchants.category, EXCLUDED.category)
 		RETURNING id`, key, nullStr(r.StoreCategory)).Scan(&r.MerchantID)
-	if err != nil {
-		return fmt.Errorf("failed to resolve merchant: %w", err)
+		if err != nil {
+			return fmt.Errorf("failed to resolve merchant: %w", err)
+		}
 	}
 	if r.StoreNumber == "" && r.StoreAddress == "" {
 		r.StoreID = nil
@@ -169,7 +175,7 @@ func (r *receiptRepo) Create(ctx context.Context, receipt *models.Receipt) error
 
 func createReceiptTx(ctx context.Context, tx txExec, receipt *models.Receipt) error {
 	receipt.Normalize()
-	if err := resolveMerchantStore(ctx, tx, receipt); err != nil {
+	if err := resolveMerchantStore(ctx, tx, receipt, false); err != nil {
 		return err
 	}
 	now := time.Now()
@@ -299,7 +305,9 @@ func (r *receiptRepo) Update(ctx context.Context, receipt *models.Receipt) error
 	// Status changes go through the same transition table as SetStatus. The row lock keeps a
 	// concurrent claim/SetStatus from slipping in between the check and the write.
 	var current string
-	if err := tx.QueryRowContext(ctx, `SELECT status FROM receipts WHERE id = $1 FOR UPDATE`, receipt.ID).Scan(&current); err != nil {
+	var oldName sql.NullString
+	var oldMerchant sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT status, store_name, merchant_id FROM receipts WHERE id = $1 FOR UPDATE`, receipt.ID).Scan(&current, &oldName, &oldMerchant); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -314,7 +322,11 @@ func (r *receiptRepo) Update(ctx context.Context, receipt *models.Receipt) error
 		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, current, requested)
 	}
 
-	if err := writeReceiptTx(ctx, tx, receipt); err != nil {
+	keep := oldMerchant.Valid && models.NormalizeMerchantName(receipt.StoreName) == models.NormalizeMerchantName(oldName.String)
+	if keep {
+		receipt.MerchantID = oldMerchant.Int64
+	}
+	if err := writeReceiptTx(ctx, tx, receipt, keep); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -324,8 +336,8 @@ func (r *receiptRepo) Update(ctx context.Context, receipt *models.Receipt) error
 }
 
 // writeReceiptTx writes header fields and replaces children. Callers have locked the row.
-func writeReceiptTx(ctx context.Context, tx *sql.Tx, receipt *models.Receipt) error {
-	if err := resolveMerchantStore(ctx, tx, receipt); err != nil {
+func writeReceiptTx(ctx context.Context, tx *sql.Tx, receipt *models.Receipt, keepMerchant bool) error {
+	if err := resolveMerchantStore(ctx, tx, receipt, keepMerchant); err != nil {
 		return err
 	}
 	receipt.UpdatedAt = time.Now()
@@ -463,7 +475,7 @@ func (r *receiptRepo) CompleteParse(ctx context.Context, rc *models.Receipt, tok
 		return fmt.Errorf("failed to lock receipt: %w", err)
 	}
 	rc.Status = status
-	if err := writeReceiptTx(ctx, tx, rc); err != nil {
+	if err := writeReceiptTx(ctx, tx, rc, false); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE receipts SET parse_error = $2, parsed_at = now() WHERE id = $1`, rc.ID, nullStr(reason)); err != nil {
