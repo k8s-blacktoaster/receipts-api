@@ -270,19 +270,24 @@ type PurchaseLocation struct {
 
 // SourceDocument is an uploaded photo (or other input) and its raw extraction.
 type SourceDocument struct {
-	ID            int64           `json:"id"`
-	Kind          string          `json:"kind"`
-	ObjectKey     string          `json:"object_key,omitempty"`
-	SHA256        []byte          `json:"-"`
-	MimeType      string          `json:"mime_type,omitempty"`
-	UploadedByID  *int64          `json:"uploaded_by_id,omitempty"`
-	RawExtraction json.RawMessage `json:"raw_extraction,omitempty"`
-	Model         string          `json:"model,omitempty"`
-	PromptVersion string          `json:"prompt_version,omitempty"`
-	ParseState    string          `json:"parse_state"`
-	Error         string          `json:"error,omitempty"`
-	ParsedAt      *time.Time      `json:"parsed_at,omitempty"`
-	CreatedAt     time.Time       `json:"created_at"`
+	ID         int64  `json:"id"`
+	Kind       string `json:"kind"`
+	ObjectKey  string `json:"object_key,omitempty"`
+	SHA256     []byte `json:"-"` // of the original upload (dedupe)
+	MimeType   string `json:"mime_type,omitempty"`
+	JPEGSHA256 []byte `json:"-"` // of the stored normalized JPEG
+	// OriginalObjectKey/MimeType are set only with KEEP_ORIGINAL_UPLOADS=true.
+	OriginalObjectKey string          `json:"original_object_key,omitempty"`
+	OriginalMimeType  string          `json:"original_mime_type,omitempty"`
+	Width, Height     int             `json:"-"`
+	UploadedByID      *int64          `json:"uploaded_by_id,omitempty"`
+	RawExtraction     json.RawMessage `json:"raw_extraction,omitempty"`
+	Model             string          `json:"model,omitempty"`
+	PromptVersion     string          `json:"prompt_version,omitempty"`
+	ParseState        string          `json:"parse_state"`
+	Error             string          `json:"error,omitempty"`
+	ParsedAt          *time.Time      `json:"parsed_at,omitempty"`
+	CreatedAt         time.Time       `json:"created_at"`
 }
 
 // UploadResult is returned by POST /uploads.

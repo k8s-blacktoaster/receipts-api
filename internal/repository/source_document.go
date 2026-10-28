@@ -69,9 +69,11 @@ func (r *sourceDocRepo) CreateUpload(ctx context.Context, doc *models.SourceDocu
 		doc.ParseState = "pending"
 	}
 	if err := tx.QueryRowContext(ctx, `
-		INSERT INTO source_documents (kind, object_key, sha256, mime_type, uploaded_by_id, parse_state)
-		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at`,
+		INSERT INTO source_documents (kind, object_key, sha256, mime_type, uploaded_by_id, parse_state,
+			jpeg_sha256, original_object_key, original_mime_type, image_width, image_height)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, 0), NULLIF($11, 0)) RETURNING id, created_at`,
 		doc.Kind, nullStr(doc.ObjectKey), doc.SHA256, nullStr(doc.MimeType), doc.UploadedByID, doc.ParseState,
+		doc.JPEGSHA256, nullStr(doc.OriginalObjectKey), nullStr(doc.OriginalMimeType), doc.Width, doc.Height,
 	).Scan(&doc.ID, &doc.CreatedAt); err != nil {
 		return fmt.Errorf("failed to create source document: %w", err)
 	}
@@ -89,13 +91,16 @@ func (r *sourceDocRepo) GetByID(ctx context.Context, id int64) (*models.SourceDo
 	var (
 		d                         models.SourceDocument
 		key, mime, model, pv, msg sql.NullString
+		okey, omime               sql.NullString
+		w, h                      sql.NullInt64
 		raw                       []byte
 	)
 	err := r.db.QueryRowContext(ctx, `
 		SELECT id, kind, object_key, sha256, mime_type, uploaded_by_id, raw_extraction, model, prompt_version,
-		       parse_state, error, parsed_at, created_at
+		       parse_state, error, parsed_at, created_at, jpeg_sha256, original_object_key, original_mime_type,
+		       image_width, image_height
 		FROM source_documents WHERE id = $1`, id).Scan(&d.ID, &d.Kind, &key, &d.SHA256, &mime, &d.UploadedByID,
-		&raw, &model, &pv, &d.ParseState, &msg, &d.ParsedAt, &d.CreatedAt)
+		&raw, &model, &pv, &d.ParseState, &msg, &d.ParsedAt, &d.CreatedAt, &d.JPEGSHA256, &okey, &omime, &w, &h)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -103,6 +108,7 @@ func (r *sourceDocRepo) GetByID(ctx context.Context, id int64) (*models.SourceDo
 		return nil, fmt.Errorf("failed to get source document: %w", err)
 	}
 	d.ObjectKey, d.MimeType, d.Model, d.PromptVersion, d.Error = key.String, mime.String, model.String, pv.String, msg.String
+	d.OriginalObjectKey, d.OriginalMimeType, d.Width, d.Height = okey.String, omime.String, int(w.Int64), int(h.Int64)
 	if len(raw) > 0 {
 		d.RawExtraction = raw
 	}
