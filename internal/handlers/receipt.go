@@ -282,8 +282,7 @@ func (h *ReceiptHandler) DeleteReceipt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.Info("receipt deleted", "receipt_id", id)
-	response := models.NewSuccessResponse(http.StatusNoContent, "Receipt deleted successfully", nil)
-	h.respondWithJSON(w, http.StatusNoContent, response)
+	w.WriteHeader(http.StatusNoContent) // 204 has no body
 }
 
 // HealthCheck handles GET /api/v1/health
