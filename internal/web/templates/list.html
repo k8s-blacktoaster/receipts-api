@@ -5,10 +5,10 @@
          app.js converts any remaining HEIC in the browser where it can; the server converts
          the rest (heif-dec) or returns 415 with guidance. */}}
     <label class="btn primary">Take photo
-      <input type="file" name="image" accept="image/jpeg,image/png" capture="environment" hidden data-autosubmit>
+      <input type="file" name="image" accept="image/*,.heic,.heif" capture="environment" hidden data-autosubmit>
     </label>
     <label class="btn">Choose photo
-      <input type="file" name="image" accept="image/jpeg,image/png,image/heic,image/heif,.heic,.heif" hidden data-autosubmit>
+      <input type="file" name="image" accept="image/*,.heic,.heif" hidden data-autosubmit>
     </label>
     <noscript><button type="submit" class="btn">Upload</button></noscript>
     <p class="hint">{{if not .Member}}Tip: <a href="/member?next=/receipts">pick who you are</a> first. {{end}}{{if not .Extract}}Extraction is off on this server: photos stay "uploaded".{{end}}</p>

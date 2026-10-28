@@ -188,13 +188,13 @@ func (e *env) do(method, path string, form url.Values, cookie bool) *httptest.Re
 func TestRenderPages(t *testing.T) {
 	e := newEnv(t)
 	for path, want := range map[string][]string{
-		"/receipts":      {"Take photo", `capture="environment"`, `accept="image/jpeg,image/png"`, "s-needs_review", "Sprouts", "$19.63", "Pick member"},
+		"/receipts":      {"Take photo", `capture="environment"`, `accept="image/*,.heic,.heif"`, "s-needs_review", "Sprouts", "$19.63", "Pick member"},
 		"/receipts/7":    {`src="/receipts/7/image"`, `value="Milk"`, "Needs review: total mismatch", "Save &amp; approve", "Re-extract"},
 		"/receipts/8":    {`http-equiv="refresh"`, "Editing is locked", "<fieldset disabled>"},
 		"/receipts/9":    {"Re-extract is disabled for reviewed receipts"},
 		"/merchants":     {`value="trader_joes"`, "4 receipts"},
 		"/member":        {"Jack", "Sam", "only reachable on the home VPN"},
-		"/static/app.js": {"createImageBitmap"},
+		"/static/app.js": {"data-autosubmit"},
 	} {
 		rec := e.do(http.MethodGet, path, nil, false)
 		if rec.Code != 200 {
