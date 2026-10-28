@@ -199,7 +199,8 @@ func (r *productRepo) MapItem(ctx context.Context, itemID, productID int64, newP
 			WHERE r.id = ri.receipt_id AND r.merchant_id = $1 AND ri.product_id IS NULL
 			  AND r.status NOT IN ('uploaded','parsing')
 			  AND (($3 <> '' AND ri.item_number = $3) OR ($5 <> '' AND ri.upc = $5)
-			       OR lower(coalesce(nullif(btrim(ri.raw_text), ''), btrim(ri.name))) = lower($4))`,
+			       OR (merchant_name_key($4) <> '' AND
+			           merchant_name_key(coalesce(nullif(btrim(ri.raw_text), ''), btrim(ri.name))) = merchant_name_key($4)))`,
 			merchantID.Int64, productID, it.ItemNumber, text, it.UPC)
 		if err != nil {
 			return nil, fmt.Errorf("failed to apply alias: %w", err)
@@ -237,7 +238,8 @@ func learnUPC(ctx context.Context, q txExec, merchantID, aliasID int64, upc stri
 // both unique keys: the text alias and the item-number alias may be different rows.
 func learnAlias(ctx context.Context, q txExec, merchantID int64, text, itemNo string, productID int64) (int64, error) {
 	var byText, byNum int64
-	err := q.QueryRowContext(ctx, `SELECT id FROM product_aliases WHERE merchant_id = $1 AND lower(alias_text) = lower($2)`, merchantID, text).Scan(&byText)
+	err := q.QueryRowContext(ctx, `SELECT id FROM product_aliases WHERE merchant_id = $1
+		AND merchant_name_key(alias_text) = merchant_name_key($2) ORDER BY id LIMIT 1`, merchantID, text).Scan(&byText)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, err
 	}

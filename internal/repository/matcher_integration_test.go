@@ -119,3 +119,33 @@ func TestMatcherAliasFuzzyScopeAndManual(t *testing.T) {
 		}
 	}
 }
+
+// Exact alias matching ignores case, punctuation and whitespace runs (merchant_name_key).
+func TestMatcherNormalizesAliasText(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	products, receipts := NewProductRepository(db), NewReceiptRepository(db)
+	_, ids := seedCatalog(t, ctx, products, receipts, 2) // alias "ACME ITEM 1"
+	r := &models.Receipt{StoreName: "Acme", Date: "2026-02-01", Source: models.SourceManual, Items: []models.ReceiptItem{
+		{Name: "acme.  item-1", Quantity: 1}, {Name: "  ACME_ITEM 1 ", Quantity: 1}, {Name: "!!", Quantity: 1}}}
+	if err := receipts.Create(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := receipts.GetByID(ctx, r.ID)
+	for _, it := range got.Items[:2] {
+		if it.ProductID == nil || *it.ProductID != ids[1] || it.MatchSource != "exact" {
+			t.Errorf("%q not matched exactly: %+v", it.Name, it)
+		}
+	}
+	if got.Items[2].ProductID != nil {
+		t.Errorf("punctuation-only line matched: %+v", got.Items[2])
+	}
+	// A review correction propagates to differently punctuated lines too.
+	r2 := &models.Receipt{StoreName: "Acme", Date: "2026-02-02", Source: models.SourceManual, Items: []models.ReceiptItem{
+		{Name: "Choc. Milk", Quantity: 1}, {Name: "choc milk", Quantity: 1}}}
+	_ = receipts.Create(ctx, r2)
+	res, err := products.MapItem(ctx, int64(r2.Items[0].ID), ids[0], nil)
+	if err != nil || res.AlsoMapped != 1 {
+		t.Fatalf("propagation: %+v %v", res, err)
+	}
+}
