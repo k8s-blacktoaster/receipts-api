@@ -18,6 +18,18 @@ type Config struct {
 	LogLevel string
 
 	Environment string // "development", "production", etc.
+
+	// Uploads / extraction (phase 2). XAI_API_KEY must come from the environment (k8s Secret);
+	// it is never read from files in the repo and never logged.
+	UploadDir                string
+	MaxUploadBytes           int64
+	ExtractionProvider       string
+	ExtractionModel          string
+	XAIAPIKey                string
+	XAIBaseURL               string
+	ExtractionTimeoutSec     int
+	ExtractionWorkers        int
+	ExtractionToleranceCents int64
 }
 
 func Load() (*Config, error) {
@@ -33,6 +45,16 @@ func Load() (*Config, error) {
 		LogLevel: getEnv("LOG_LEVEL", "info"),
 
 		Environment: getEnv("ENVIRONMENT", "development"),
+
+		UploadDir:                getEnv("UPLOAD_DIR", "data/uploads"),
+		MaxUploadBytes:           int64(getEnvAsInt("MAX_UPLOAD_BYTES", 20<<20)),
+		ExtractionProvider:       getEnv("EXTRACTION_PROVIDER", "xai"),
+		ExtractionModel:          os.Getenv("EXTRACTION_MODEL"),
+		XAIAPIKey:                os.Getenv("XAI_API_KEY"),
+		XAIBaseURL:               getEnv("XAI_BASE_URL", "https://api.x.ai/v1"),
+		ExtractionTimeoutSec:     getEnvAsInt("EXTRACTION_TIMEOUT_SECONDS", 120),
+		ExtractionWorkers:        getEnvAsInt("EXTRACTION_WORKERS", 2),
+		ExtractionToleranceCents: int64(getEnvAsInt("EXTRACTION_TOLERANCE_CENTS", 2)),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -62,6 +84,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid LOG_LEVEL: must be debug, info, warn, or error")
 	}
 
+	if c.ExtractionToleranceCents < 0 {
+		return fmt.Errorf("invalid EXTRACTION_TOLERANCE_CENTS: must be >= 0")
+	}
 	return nil
 }
 

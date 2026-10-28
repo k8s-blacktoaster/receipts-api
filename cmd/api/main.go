@@ -29,9 +29,11 @@ import (
 	"github.com/joho/godotenv"
 	"receipts-db/internal/config"
 	"receipts-db/internal/database"
+	"receipts-db/internal/extraction"
 	"receipts-db/internal/handlers"
 	"receipts-db/internal/repository"
 	"receipts-db/internal/router"
+	"receipts-db/internal/storage"
 )
 
 func main() {
@@ -87,13 +89,46 @@ func main() {
 
 	receiptHandler := handlers.NewReceiptHandler(receiptRepo, logger)
 
-	handler := router.New(receiptHandler, logger)
+	// ---- photo upload + extraction (phase 2) ----
+	docRepo := repository.NewSourceDocumentRepository(db)
+	blobs, err := storage.NewLocal(cfg.UploadDir)
+	if err != nil {
+		logger.Error("failed to init upload storage", "error", err)
+		os.Exit(1)
+	}
+	provider, err := extraction.NewProvider(extraction.Config{
+		Provider: cfg.ExtractionProvider, Model: cfg.ExtractionModel, XAIAPIKey: cfg.XAIAPIKey,
+		XAIBaseURL: cfg.XAIBaseURL, Timeout: time.Duration(cfg.ExtractionTimeoutSec) * time.Second,
+	})
+	if err != nil {
+		// uploads still work; receipts stay "uploaded" until a provider is configured
+		logger.Warn("extraction disabled", "reason", err.Error())
+		provider = nil
+	}
+	workerCtx, stopWorkers := context.WithCancel(context.Background())
+	defer stopWorkers()
+	var queue *extraction.Queue
+	if provider != nil {
+		logger.Info("extraction enabled", "provider", provider.Name(), "model", provider.Model())
+		pipeline := &extraction.Pipeline{Receipts: receiptRepo, Docs: docRepo, Blobs: blobs, Provider: provider,
+			ToleranceCents: cfg.ExtractionToleranceCents, Logger: logger}
+		queue = extraction.NewQueue(pipeline, 100, time.Duration(cfg.ExtractionTimeoutSec+30)*time.Second, logger)
+		queue.Start(workerCtx, cfg.ExtractionWorkers)
+		queue.RequeuePending(workerCtx, receiptRepo.ListIDsByStatus)
+	}
+	uploadHandler := &handlers.UploadHandler{Store: docRepo, Receipts: receiptRepo, Blobs: blobs,
+		MaxBytes: cfg.MaxUploadBytes, Logger: logger}
+	if queue != nil {
+		uploadHandler.Queue = queue
+	}
+
+	handler := router.New(receiptHandler, uploadHandler, logger)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),
 		Handler:      handler,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  60 * time.Second, // photo uploads from phones on slow links
+		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
@@ -119,6 +154,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	stopWorkers()
+	if queue != nil {
+		queue.Wait()
+	}
 	logger.Info("server stopped")
 }
 
