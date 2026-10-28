@@ -35,6 +35,17 @@ func TestReasoningEffortOnlySentWhenSupported(t *testing.T) {
 	}
 }
 
+func TestDefaultModelGetsDefaultEffort(t *testing.T) {
+	p, err := NewXAIProvider("", "k", "", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.ReasoningEffort = DefaultReasoningEffort
+	if p.Model() != "grok-4.7" || p.SentReasoningEffort() != "low" {
+		t.Fatalf("default %s/%s", p.Model(), p.SentReasoningEffort())
+	}
+}
+
 func TestNewProviderPassesReasoningEffort(t *testing.T) {
 	p, err := NewProvider(Config{Provider: "xai", XAIAPIKey: "k", Model: "grok-4.3", ReasoningEffort: "low"})
 	if err != nil || p.(*XAIProvider).SentReasoningEffort() != "low" {

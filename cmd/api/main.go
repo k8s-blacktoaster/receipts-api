@@ -110,7 +110,7 @@ func main() {
 		provider = nil
 	}
 	if xp, ok := provider.(*extraction.XAIProvider); ok {
-		if cfg.ExtractionReasoningEffort != "" && xp.SentReasoningEffort() == "" {
+		if os.Getenv("EXTRACTION_REASONING_EFFORT") != "" && xp.SentReasoningEffort() == "" {
 			logger.Warn("EXTRACTION_REASONING_EFFORT not supported by model; not sent",
 				"model", xp.Model(), "effort", cfg.ExtractionReasoningEffort)
 		}

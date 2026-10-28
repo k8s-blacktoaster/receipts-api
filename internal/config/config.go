@@ -61,7 +61,7 @@ func Load() (*Config, error) {
 		HEICDecoder:               getEnv("HEIC_DECODER", ""),
 		ExtractionProvider:        getEnv("EXTRACTION_PROVIDER", "xai"),
 		ExtractionModel:           os.Getenv("EXTRACTION_MODEL"),
-		ExtractionReasoningEffort: strings.ToLower(strings.TrimSpace(os.Getenv("EXTRACTION_REASONING_EFFORT"))),
+		ExtractionReasoningEffort: strings.ToLower(strings.TrimSpace(getEnv("EXTRACTION_REASONING_EFFORT", "low"))),
 		XAIAPIKey:                 os.Getenv("XAI_API_KEY"),
 		XAIBaseURL:                getEnv("XAI_BASE_URL", "https://api.x.ai/v1"),
 		ExtractionTimeoutSec:      getEnvAsInt("EXTRACTION_TIMEOUT_SECONDS", 300),

@@ -15,7 +15,14 @@ import (
 )
 
 // DefaultXAIModel is the default Grok vision model; override with EXTRACTION_MODEL.
-const DefaultXAIModel = "grok-4.20"
+// DefaultXAIModel won the Oct 2026 golden comparison (receipt-v3, 3 receipts): grok-4.7 with
+// reasoning_effort=low got every line item right in ~20-55 s; grok-4.20 (reasoning) took 2-5 min
+// and misaligned prices; grok-4.20 non-reasoning and grok-4.3 low mis-split discount lines.
+const DefaultXAIModel = "grok-4.7"
+
+// DefaultReasoningEffort is used when EXTRACTION_REASONING_EFFORT is unset (sent only to models
+// that accept it).
+const DefaultReasoningEffort = "low"
 
 // DefaultXAIBaseURL is the xAI OpenAI-compatible API root.
 const DefaultXAIBaseURL = "https://api.x.ai/v1"

@@ -57,7 +57,7 @@ func TestExtractionSweepInterval(t *testing.T) {
 func TestExtractionTimeoutAndReasoningEffort(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://x/y_test")
 	cfg, err := Load()
-	if err != nil || cfg.ExtractionTimeoutSec != 300 || cfg.ExtractionReasoningEffort != "" {
+	if err != nil || cfg.ExtractionTimeoutSec != 300 || cfg.ExtractionReasoningEffort != "low" {
 		t.Fatalf("defaults: %v %+v", err, cfg)
 	}
 	t.Setenv("EXTRACTION_REASONING_EFFORT", " LOW ")
