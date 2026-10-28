@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"receipts-db/internal/httpguard"
 	"strconv"
 	"strings"
 	"time"
@@ -123,7 +124,7 @@ func (u *UI) Register(r chi.Router) {
 	r.Handle("/static/*", http.StripPrefix("/static/", cacheStatic(http.FileServer(http.FS(static)))))
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/receipts", http.StatusFound) })
 	r.Group(func(r chi.Router) {
-		r.Use(sameOrigin)
+		r.Use(httpguard.SameOrigin)
 		r.Get("/receipts", u.list)
 		r.Post("/upload", u.upload)
 		r.Get("/receipts/{id}", u.detail)
@@ -142,26 +143,6 @@ func cacheStatic(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 		h.ServeHTTP(w, r)
-	})
-}
-
-// sameOrigin rejects cross-site form posts (cheap CSRF guard; there is no session to steal,
-// but a malicious page on another origin must not be able to edit receipts via a VPN browser).
-func sameOrigin(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
-				http.Error(w, "cross-site request refused", http.StatusForbidden)
-				return
-			}
-			if o := r.Header.Get("Origin"); o != "" && o != "null" {
-				if ou, err := url.Parse(o); err != nil || ou.Host != r.Host {
-					http.Error(w, "cross-origin request refused", http.StatusForbidden)
-					return
-				}
-			}
-		}
-		next.ServeHTTP(w, r)
 	})
 }
 

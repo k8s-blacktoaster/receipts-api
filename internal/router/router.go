@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"receipts-db/internal/httpguard"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -35,18 +36,19 @@ func New(receiptHandler *handlers.ReceiptHandler, uploadHandler *handlers.Upload
 	r.Get("/api/v1/health", receiptHandler.HealthCheck)
 
 	r.Route("/api/v1/receipts", func(r chi.Router) {
-		r.Get("/", receiptHandler.ListReceipts)         // GET /api/v1/receipts
-		r.Post("/", receiptHandler.CreateReceipt)       // POST /api/v1/receipts
-		r.Get("/{id}", receiptHandler.GetReceipt)       // GET /api/v1/receipts/{id}
-		r.Put("/{id}", receiptHandler.UpdateReceipt)    // PUT /api/v1/receipts/{id}
-		r.Delete("/{id}", receiptHandler.DeleteReceipt) // DELETE /api/v1/receipts/{id}
+		r.Use(httpguard.SameOrigin)
+		r.Get("/", receiptHandler.ListReceipts)                                  // GET /api/v1/receipts
+		r.With(httpguard.RequireJSON).Post("/", receiptHandler.CreateReceipt)    // POST /api/v1/receipts
+		r.Get("/{id}", receiptHandler.GetReceipt)                                // GET /api/v1/receipts/{id}
+		r.With(httpguard.RequireJSON).Put("/{id}", receiptHandler.UpdateReceipt) // PUT /api/v1/receipts/{id}
+		r.Delete("/{id}", receiptHandler.DeleteReceipt)                          // DELETE /api/v1/receipts/{id}
 		if uploadHandler != nil {
 			r.Post("/{id}/extract", uploadHandler.ReextractReceipt) // POST /api/v1/receipts/{id}/extract
 		}
 	})
 
 	if uploadHandler != nil {
-		r.Post("/api/v1/uploads", uploadHandler.UploadReceiptPhoto) // POST /api/v1/uploads (multipart)
+		r.With(httpguard.SameOrigin).Post("/api/v1/uploads", uploadHandler.UploadReceiptPhoto) // POST /api/v1/uploads (multipart)
 	}
 
 	if ui != nil {
