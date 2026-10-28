@@ -79,6 +79,17 @@ func (d *ExecDecoder) Decode(ctx context.Context, data []byte) (image.Image, err
 		return nil, fmt.Errorf("%s produced no output: %w", d.Name(), err)
 	}
 	defer f.Close()
+	// the decoder's output is bounded too (bit depth may differ from what ispe implied)
+	cfg, _, err := image.DecodeConfig(f)
+	if err != nil {
+		return nil, fmt.Errorf("%s output: %w", d.Name(), err)
+	}
+	if err := checkSize(cfg.Width, cfg.Height, bytesPerPixel(cfg.ColorModel)); err != nil {
+		return nil, err
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		return nil, err
+	}
 	img, _, err := image.Decode(f)
 	return img, err
 }

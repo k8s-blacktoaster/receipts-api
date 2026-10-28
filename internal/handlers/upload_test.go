@@ -330,7 +330,9 @@ func (f *fakeHEIC) Decode(context.Context, []byte) (image.Image, error) {
 	return image.NewRGBA(image.Rect(0, 0, 2400, 3200)), nil
 }
 
-var heicBytes = append(append([]byte{0, 0, 0, 0x18}, []byte("ftypheic\x00\x00\x00\x00mif1heic")...), make([]byte, 64)...)
+// minimal ftyp + an ispe property (2400x3200) so the pre-decode size check passes
+var heicBytes = append(append(append([]byte{0, 0, 0, 0x18}, []byte("ftypheic\x00\x00\x00\x00mif1heic")...),
+	0, 0, 0, 20, 'i', 's', 'p', 'e', 0, 0, 0, 0, 0, 0, 0x09, 0x60, 0, 0, 0x0c, 0x80), make([]byte, 64)...)
 
 func TestUploadHEIC(t *testing.T) {
 	// no decoder on this server: 415 with guidance, nothing stored

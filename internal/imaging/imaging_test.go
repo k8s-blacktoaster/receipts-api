@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"image/png"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func solid(w, h int) *image.RGBA {
@@ -156,4 +160,108 @@ func TestNormalizeHEIC(t *testing.T) {
 		t.Fatalf("heic -> %dx%d via %s", res.Width, res.Height, dec.Name())
 	}
 	t.Logf("HEIC decoded with %s", dec.Name())
+}
+
+func ispeHEIC(w, h uint32) []byte {
+	b := append([]byte{0, 0, 0, 0x18}, []byte("ftypheic\x00\x00\x00\x00mif1heic")...)
+	b = append(b, 0, 0, 0, 20, 'i', 's', 'p', 'e', 0, 0, 0, 0)
+	b = binary.BigEndian.AppendUint32(b, w)
+	b = binary.BigEndian.AppendUint32(b, h)
+	return append(b, make([]byte, 32)...)
+}
+
+type countingDecoder struct{ calls int }
+
+func (c *countingDecoder) Name() string { return "count" }
+func (c *countingDecoder) Decode(context.Context, []byte) (image.Image, error) {
+	c.calls++
+	return image.NewRGBA(image.Rect(0, 0, 10, 10)), nil
+}
+
+// M2: HEIC dimensions are checked from ispe BEFORE the decoder runs; missing ispe is corrupt.
+func TestHEICSizeCheckedBeforeDecode(t *testing.T) {
+	dec := &countingDecoder{}
+	if _, err := Normalize(context.Background(), ispeHEIC(10000, 10000), dec); !errors.Is(err, ErrTooLarge) || dec.calls != 0 {
+		t.Fatalf("100MP HEIC: %v calls=%d", err, dec.calls)
+	}
+	// 16-bit budget: 5000x5000 = 25MP x 8 B = 200MB > budget? exactly 200,000,000 < 209,715,200 -> ok
+	if _, err := Normalize(context.Background(), ispeHEIC(5000, 5000), dec); err != nil || dec.calls != 1 {
+		t.Fatalf("25MP HEIC: %v calls=%d", err, dec.calls)
+	}
+	if _, err := Normalize(context.Background(), ispeHEIC(6000, 6000), dec); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("36MP HEIC at 8 B/px must exceed the byte budget: %v", err)
+	}
+	noIspe := append([]byte{0, 0, 0, 0x18}, []byte("ftypheic\x00\x00\x00\x00mif1heic")...)
+	if _, err := Normalize(context.Background(), append(noIspe, make([]byte, 64)...), dec); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("no ispe: %v", err)
+	}
+}
+
+// M2: the pixel budget accounts for bit depth (a 16-bit PNG gets half the pixels of 8-bit).
+func TestByteBudgetByBitDepth(t *testing.T) {
+	if checkSize(7000, 7000, 4) != nil { // 49MP x 4 = 196MB
+		t.Fatal("49MP 8-bit should fit")
+	}
+	if checkSize(7000, 7000, 8) == nil { // 49MP x 8 = 392MB
+		t.Fatal("49MP 16-bit must be refused")
+	}
+	if bytesPerPixel(color.NRGBA64Model) != 8 || bytesPerPixel(color.GrayModel) != 1 {
+		t.Fatal("bytesPerPixel")
+	}
+	// a real 16-bit PNG header is read as 8 B/px by DecodeConfig
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, image.NewNRGBA64(image.Rect(0, 0, 4, 4)))
+	cfg, _ := png.DecodeConfig(bytes.NewReader(buf.Bytes()))
+	if bytesPerPixel(cfg.ColorModel) != 8 {
+		t.Fatalf("16-bit png model %T", cfg.ColorModel)
+	}
+}
+
+// M2: at most MaxConcurrent normalizations run at once.
+func TestNormalizeConcurrencyLimit(t *testing.T) {
+	var cur, peak int32
+	block := make(chan struct{})
+	dec := decoderFunc(func() {
+		n := atomic.AddInt32(&cur, 1)
+		for {
+			p := atomic.LoadInt32(&peak)
+			if n <= p || atomic.CompareAndSwapInt32(&peak, p, n) {
+				break
+			}
+		}
+		<-block
+		atomic.AddInt32(&cur, -1)
+	})
+	var wg sync.WaitGroup
+	for i := 0; i < 6; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, _ = Normalize(context.Background(), ispeHEIC(100, 100), dec) }()
+	}
+	time.Sleep(100 * time.Millisecond)
+	close(block)
+	wg.Wait()
+	if peak != MaxConcurrent {
+		t.Fatalf("peak concurrency %d, want %d", peak, MaxConcurrent)
+	}
+	// a cancelled context does not wait for a slot
+	for i := 0; i < MaxConcurrent; i++ {
+		sem <- struct{}{}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := Normalize(ctx, ispeHEIC(100, 100), dec)
+	for i := 0; i < MaxConcurrent; i++ {
+		<-sem
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled: %v", err)
+	}
+}
+
+type decoderFunc func()
+
+func (f decoderFunc) Name() string { return "func" }
+func (f decoderFunc) Decode(context.Context, []byte) (image.Image, error) {
+	f()
+	return image.NewRGBA(image.Rect(0, 0, 100, 100)), nil
 }
