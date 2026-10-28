@@ -175,8 +175,8 @@ func (d Deps) searchProducts(ctx context.Context, raw json.RawMessage) (any, err
 	return map[string]any{"products": hits}, nil
 }
 
-func linesResult(key string, lines []models.PurchaseLine, limit int, extra map[string]any) map[string]any {
-	out := map[string]any{key: lines, "truncated": len(lines) >= limit, "receipt_ids": receiptIDs(lines)}
+func linesResult(key string, lines []models.PurchaseLine, truncated bool, extra map[string]any) map[string]any {
+	out := map[string]any{key: lines, "truncated": truncated, "receipt_ids": receiptIDs(lines)}
 	for k, v := range extra {
 		out[k] = v
 	}
@@ -195,8 +195,11 @@ func receiptIDs(lines []models.PurchaseLine) []int64 {
 
 func (d Deps) searchPurchases(ctx context.Context, raw json.RawMessage) (any, error) {
 	var a struct {
-		Query, Merchant, From, To string
-		Limit                     int
+		Query    string `json:"query"`
+		Merchant string `json:"merchant"`
+		From     string `json:"from"`
+		To       string `json:"to"`
+		Limit    int    `json:"limit"`
 	}
 	if err := decodeArgs(raw, &a); err != nil {
 		return nil, err
@@ -215,11 +218,11 @@ func (d Deps) searchPurchases(ctx context.Context, raw json.RawMessage) (any, er
 	if err != nil {
 		return nil, err
 	}
-	lines, err := d.Query.SearchPurchases(ctx, repository.PurchaseFilter{Query: a.Query, MerchantID: mid, From: a.From, To: a.To, Limit: limit})
+	lines, truncated, err := d.Query.SearchPurchases(ctx, repository.PurchaseFilter{Query: a.Query, MerchantID: mid, From: a.From, To: a.To, Limit: limit})
 	if err != nil {
 		return nil, err
 	}
-	return linesResult("purchases", lines, limit, map[string]any{"merchant": m}), nil
+	return linesResult("purchases", lines, truncated, map[string]any{"merchant": m}), nil
 }
 
 func (d Deps) product(ctx context.Context, id int64) (*models.Product, error) {
@@ -231,18 +234,6 @@ func (d Deps) product(ctx context.Context, id int64) (*models.Product, error) {
 		return nil, bad("no product with id %d; use search_products", id)
 	}
 	return p, err
-}
-
-type location struct {
-	MerchantID     int64   `json:"merchant_id"`
-	MerchantName   string  `json:"merchant_name"`
-	StoreID        *int64  `json:"store_id,omitempty"`
-	StoreNumber    string  `json:"store_number,omitempty"`
-	StoreAddress   string  `json:"store_address,omitempty"`
-	Purchases      int     `json:"purchases"`
-	LastDate       string  `json:"last_date,omitempty"`
-	LastPriceCents int64   `json:"last_unit_price_cents"`
-	ReceiptIDs     []int64 `json:"receipt_ids"`
 }
 
 func (d Deps) whereBought(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -261,37 +252,20 @@ func (d Deps) whereBought(ctx context.Context, raw json.RawMessage) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	lines, err := d.Query.PriceHistory(ctx, p.ID, 0, maxLimit)
+	wb, err := d.Query.WhereBought(ctx, p.ID, limit)
 	if err != nil {
 		return nil, err
 	}
-	slices.Reverse(lines) // newest first
-	locs := []*location{}
-	for _, l := range lines {
-		i := slices.IndexFunc(locs, func(x *location) bool {
-			return x.MerchantID == l.MerchantID && ((x.StoreID == nil && l.StoreID == nil) || (x.StoreID != nil && l.StoreID != nil && *x.StoreID == *l.StoreID))
-		})
-		if i < 0 {
-			locs = append(locs, &location{MerchantID: l.MerchantID, MerchantName: l.MerchantName, StoreID: l.StoreID,
-				StoreNumber: l.StoreNumber, StoreAddress: l.StoreAddress, LastDate: l.PurchaseDate, LastPriceCents: l.UnitPriceCents, ReceiptIDs: []int64{}})
-			i = len(locs) - 1
-		}
-		locs[i].Purchases++
-		if !slices.Contains(locs[i].ReceiptIDs, l.ReceiptID) {
-			locs[i].ReceiptIDs = append(locs[i].ReceiptIDs, l.ReceiptID)
-		}
-	}
-	truncated := len(lines) >= maxLimit
-	if len(lines) > limit {
-		lines, truncated = lines[:limit], true
-	}
-	return map[string]any{"product": p, "locations": locs, "purchases": lines, "truncated": truncated, "receipt_ids": receiptIDs(lines)}, nil
+	return map[string]any{"product": p, "locations": wb.Locations, "purchases": wb.Purchases,
+		"truncated": wb.Truncated, "receipt_ids": receiptIDs(wb.Purchases)}, nil
 }
 
 func (d Deps) spend(ctx context.Context, raw json.RawMessage) (any, error) {
 	var a struct {
-		Merchant, From, To string
-		GroupBy            string `json:"group_by"`
+		Merchant string `json:"merchant"`
+		From     string `json:"from"`
+		To       string `json:"to"`
+		GroupBy  string `json:"group_by"`
 	}
 	if err := decodeArgs(raw, &a); err != nil {
 		return nil, err
@@ -329,9 +303,9 @@ func cmpOr(s, def string) string {
 
 func (d Deps) priceHistory(ctx context.Context, raw json.RawMessage) (any, error) {
 	var a struct {
-		ProductID int64 `json:"product_id"`
-		Merchant  string
-		Limit     int
+		ProductID int64  `json:"product_id"`
+		Merchant  string `json:"merchant"`
+		Limit     int    `json:"limit"`
 	}
 	if err := decodeArgs(raw, &a); err != nil {
 		return nil, err
@@ -348,9 +322,9 @@ func (d Deps) priceHistory(ctx context.Context, raw json.RawMessage) (any, error
 	if err != nil {
 		return nil, err
 	}
-	lines, err := d.Query.PriceHistory(ctx, p.ID, mid, limit)
+	lines, truncated, err := d.Query.PriceHistory(ctx, p.ID, mid, limit)
 	if err != nil {
 		return nil, err
 	}
-	return linesResult("purchases", lines, limit, map[string]any{"product": p, "merchant": m}), nil
+	return linesResult("purchases", lines, truncated, map[string]any{"product": p, "merchant": m}), nil
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/lib/pq"
@@ -22,10 +23,15 @@ type QueryRepository interface {
 	// pg_trgm candidates ranked by similarity (MCP-06). ErrInvalidMerchantName for an empty key.
 	ResolveMerchant(ctx context.Context, name string, limit int) (*models.MerchantSummary, []models.MerchantCandidate, error)
 	ListMerchants(ctx context.Context) ([]models.MerchantSummary, error)
-	// SearchPurchases finds line items whose name, raw text or mapped product name contains q.
-	SearchPurchases(ctx context.Context, f PurchaseFilter) ([]models.PurchaseLine, error)
-	// PriceHistory lists purchases of a product, oldest first (returns excluded).
-	PriceHistory(ctx context.Context, productID, merchantID int64, limit int) ([]models.PurchaseLine, error)
+	// SearchPurchases finds line items whose name, raw text or mapped product name contains q,
+	// newest first. truncated reports that more than f.Limit rows matched.
+	SearchPurchases(ctx context.Context, f PurchaseFilter) (lines []models.PurchaseLine, truncated bool, err error)
+	// PriceHistory returns the newest `limit` purchases of a product (returns excluded), sorted
+	// oldest first for display. truncated reports that older purchases were left out.
+	PriceHistory(ctx context.Context, productID, merchantID int64, limit int) (lines []models.PurchaseLine, truncated bool, err error)
+	// WhereBought aggregates every counted purchase of a product per merchant + store in SQL
+	// (newest location first) and returns the newest `limit` purchases.
+	WhereBought(ctx context.Context, productID int64, limit int) (*models.WhereBought, error)
 	// Spend totals receipts.total_cents grouped by "merchant" or "month".
 	Spend(ctx context.Context, f SpendFilter) ([]models.SpendGroup, error)
 	// LastPurchases returns the newest counted purchase of each product id.
@@ -188,8 +194,17 @@ func nullDate(s string) any {
 	return s
 }
 
-func (r *queryRepo) SearchPurchases(ctx context.Context, f PurchaseFilter) ([]models.PurchaseLine, error) {
+// trim cuts a limit+1 fetch to limit rows and reports whether there were more.
+func trim(lines []models.PurchaseLine, limit int) ([]models.PurchaseLine, bool) {
+	if len(lines) > limit {
+		return lines[:limit], true
+	}
+	return lines, false
+}
+
+func (r *queryRepo) SearchPurchases(ctx context.Context, f PurchaseFilter) ([]models.PurchaseLine, bool, error) {
 	q := strings.ToLower(strings.TrimSpace(f.Query))
+	limit := clampLimit(f.Limit)
 	var out []models.PurchaseLine
 	err := r.readOnly(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, purchaseLineSQL+`
@@ -201,31 +216,105 @@ func (r *queryRepo) SearchPurchases(ctx context.Context, f PurchaseFilter) ([]mo
 			  AND ($4::date IS NULL OR r.date >= $4::date)
 			  AND ($5::date IS NULL OR r.date <= $5::date)
 			ORDER BY r.date DESC NULLS LAST, r.id DESC, ri.id
-			LIMIT $6`, pq.Array(CountedStatuses), q, f.MerchantID, nullDate(f.From), nullDate(f.To), clampLimit(f.Limit))
+			LIMIT $6`, pq.Array(CountedStatuses), q, f.MerchantID, nullDate(f.From), nullDate(f.To), limit+1)
 		if err != nil {
 			return fmt.Errorf("search purchases: %w", err)
 		}
 		out, err = scanLines(rows)
 		return err
 	})
-	return out, err
+	out, truncated := trim(out, limit)
+	return out, truncated, err
 }
 
-func (r *queryRepo) PriceHistory(ctx context.Context, productID, merchantID int64, limit int) ([]models.PurchaseLine, error) {
+func (r *queryRepo) PriceHistory(ctx context.Context, productID, merchantID int64, limit int) ([]models.PurchaseLine, bool, error) {
+	limit = clampLimit(limit)
 	var out []models.PurchaseLine
 	err := r.readOnly(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, purchaseLineSQL+`
 			WHERE r.status = ANY($1) AND ri.product_id = $2 AND NOT ri.is_return
 			  AND ($3::bigint = 0 OR r.merchant_id = $3)
-			ORDER BY r.date NULLS LAST, r.id, ri.id
-			LIMIT $4`, pq.Array(CountedStatuses), productID, merchantID, clampLimit(limit))
+			ORDER BY r.date DESC NULLS LAST, r.id DESC, ri.id DESC
+			LIMIT $4`, pq.Array(CountedStatuses), productID, merchantID, limit+1)
 		if err != nil {
 			return fmt.Errorf("price history: %w", err)
 		}
 		out, err = scanLines(rows)
 		return err
 	})
-	return out, err
+	if err != nil {
+		return nil, false, err
+	}
+	out, truncated := trim(out, limit)
+	slices.Reverse(out) // picked newest, shown oldest first
+	return out, truncated, nil
+}
+
+// LocationReceiptIDs caps the receipt ids listed per where_bought location.
+const LocationReceiptIDs = 50
+
+func (r *queryRepo) WhereBought(ctx context.Context, productID int64, limit int) (*models.WhereBought, error) {
+	limit = clampLimit(limit)
+	wb := &models.WhereBought{Locations: []models.ProductLocation{}}
+	err := r.readOnly(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `
+			WITH l AS (
+				SELECT ri.id AS item_id, r.id AS receipt_id, r.date, r.merchant_id, r.store_id, ri.unit_price_cents
+				FROM receipt_items ri JOIN receipts r ON r.id = ri.receipt_id
+				WHERE r.status = ANY($1) AND ri.product_id = $2 AND NOT ri.is_return)
+			SELECT l.merchant_id, m.name, l.store_id, COALESCE(s.store_number, ''), COALESCE(s.address, ''),
+			       count(*), count(DISTINCT l.receipt_id),
+			       COALESCE(to_char(max(l.date), 'YYYY-MM-DD'), ''),
+			       (array_agg(l.unit_price_cents ORDER BY l.date DESC NULLS LAST, l.receipt_id DESC, l.item_id DESC))[1],
+			       (array_agg(l.receipt_id ORDER BY l.date DESC NULLS LAST, l.receipt_id DESC, l.item_id DESC))
+			FROM l JOIN merchants m ON m.id = l.merchant_id LEFT JOIN stores s ON s.id = l.store_id
+			GROUP BY l.merchant_id, m.name, l.store_id, s.store_number, s.address
+			ORDER BY max(l.date) DESC NULLS LAST, max(l.receipt_id) DESC`, pq.Array(CountedStatuses), productID)
+		if err != nil {
+			return fmt.Errorf("where bought: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var loc models.ProductLocation
+			var ids pq.Int64Array
+			var distinct int
+			if err := rows.Scan(&loc.MerchantID, &loc.MerchantName, &loc.StoreID, &loc.StoreNumber, &loc.StoreAddress,
+				&loc.Purchases, &distinct, &loc.LastDate, &loc.LastUnitPriceCents, &ids); err != nil {
+				return err
+			}
+			loc.ReceiptIDs = []int64{}
+			for _, id := range ids {
+				if len(loc.ReceiptIDs) == LocationReceiptIDs {
+					break
+				}
+				if !slices.Contains(loc.ReceiptIDs, id) {
+					loc.ReceiptIDs = append(loc.ReceiptIDs, id)
+				}
+			}
+			loc.ReceiptIDsTruncated = distinct > len(loc.ReceiptIDs)
+			wb.Locations = append(wb.Locations, loc)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		prow, err := tx.QueryContext(ctx, purchaseLineSQL+`
+			WHERE r.status = ANY($1) AND ri.product_id = $2 AND NOT ri.is_return
+			ORDER BY r.date DESC NULLS LAST, r.id DESC, ri.id DESC
+			LIMIT $3`, pq.Array(CountedStatuses), productID, limit+1)
+		if err != nil {
+			return fmt.Errorf("where bought purchases: %w", err)
+		}
+		lines, err := scanLines(prow)
+		if err != nil {
+			return err
+		}
+		wb.Purchases, wb.Truncated = trim(lines, limit)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return wb, nil
 }
 
 func (r *queryRepo) LastPurchases(ctx context.Context, ids []int64) (map[int64]models.PurchaseLine, error) {
@@ -254,6 +343,9 @@ func (r *queryRepo) LastPurchases(ctx context.Context, ids []int64) (map[int64]m
 	return out, err
 }
 
+// SpendReceiptIDs caps the receipt ids listed per spend group (newest first).
+const SpendReceiptIDs = 100
+
 // ErrBadGroupBy: Spend accepts group_by "merchant" or "month".
 var ErrBadGroupBy = errors.New(`group_by must be "merchant" or "month"`)
 
@@ -272,13 +364,13 @@ func (r *queryRepo) Spend(ctx context.Context, f SpendFilter) ([]models.SpendGro
 		rows, err := tx.QueryContext(ctx, `
 			SELECT `+key+` AS k, count(*), sum(r.total_cents), sum(r.tax_cents), sum(r.savings_cents),
 			       COALESCE(to_char(min(r.date), 'YYYY-MM-DD'), ''), COALESCE(to_char(max(r.date), 'YYYY-MM-DD'), ''),
-			       array_agg(r.id ORDER BY r.date DESC NULLS LAST, r.id DESC)
+			       (array_agg(r.id ORDER BY r.date DESC NULLS LAST, r.id DESC))[1:$5]
 			FROM receipts r JOIN merchants m ON m.id = r.merchant_id
 			WHERE r.status = ANY($1)
 			  AND ($2::bigint = 0 OR r.merchant_id = $2)
 			  AND ($3::date IS NULL OR r.date >= $3::date)
 			  AND ($4::date IS NULL OR r.date <= $4::date)
-			GROUP BY k ORDER BY k`, pq.Array(CountedStatuses), f.MerchantID, nullDate(f.From), nullDate(f.To))
+			GROUP BY k ORDER BY k`, pq.Array(CountedStatuses), f.MerchantID, nullDate(f.From), nullDate(f.To), SpendReceiptIDs)
 		if err != nil {
 			return fmt.Errorf("spend: %w", err)
 		}
@@ -291,6 +383,7 @@ func (r *queryRepo) Spend(ctx context.Context, f SpendFilter) ([]models.SpendGro
 				return err
 			}
 			g.ReceiptIDs = []int64(ids)
+			g.ReceiptIDsTruncated = g.ReceiptCount > len(g.ReceiptIDs)
 			out = append(out, g)
 		}
 		return rows.Err()

@@ -12,10 +12,12 @@ import (
 
 type fakeQuery struct {
 	repository.QueryRepository
-	resolved []string
-	spendF   repository.SpendFilter
-	searchF  repository.PurchaseFilter
-	lines    []models.PurchaseLine
+	resolved  []string
+	spendF    repository.SpendFilter
+	searchF   repository.PurchaseFilter
+	lines     []models.PurchaseLine
+	truncated bool
+	wbLimit   int
 }
 
 func (f *fakeQuery) ResolveMerchant(_ context.Context, name string, _ int) (*models.MerchantSummary, []models.MerchantCandidate, error) {
@@ -32,12 +34,17 @@ func (f *fakeQuery) ResolveMerchant(_ context.Context, name string, _ int) (*mod
 func (f *fakeQuery) ListMerchants(context.Context) ([]models.MerchantSummary, error) {
 	return []models.MerchantSummary{{ID: 7, Name: "trader_joes", ReceiptCount: 2, LastVisit: "2026-02-01", LastReceiptID: 11}}, nil
 }
-func (f *fakeQuery) SearchPurchases(_ context.Context, pf repository.PurchaseFilter) ([]models.PurchaseLine, error) {
+func (f *fakeQuery) SearchPurchases(_ context.Context, pf repository.PurchaseFilter) ([]models.PurchaseLine, bool, error) {
 	f.searchF = pf
-	return f.lines, nil
+	return f.lines, f.truncated, nil
 }
-func (f *fakeQuery) PriceHistory(_ context.Context, _, _ int64, _ int) ([]models.PurchaseLine, error) {
-	return f.lines, nil
+func (f *fakeQuery) PriceHistory(_ context.Context, _, _ int64, _ int) ([]models.PurchaseLine, bool, error) {
+	return f.lines, f.truncated, nil
+}
+func (f *fakeQuery) WhereBought(_ context.Context, _ int64, limit int) (*models.WhereBought, error) {
+	f.wbLimit = limit
+	return &models.WhereBought{Locations: []models.ProductLocation{{MerchantID: 8, MerchantName: "corner_grocer", Purchases: 1,
+		LastDate: "2026-02-20", LastUnitPriceCents: 1100, ReceiptIDs: []int64{12}}}, Purchases: f.lines, Truncated: f.truncated}, nil
 }
 func (f *fakeQuery) Spend(_ context.Context, sf repository.SpendFilter) ([]models.SpendGroup, error) {
 	f.spendF = sf
@@ -140,28 +147,24 @@ func TestToolResultsCarryReceiptIDs(t *testing.T) {
 		{ReceiptID: 11, PurchaseDate: "2026-02-01", MerchantID: 7, MerchantName: "trader_joes", StoreID: store(3), UnitPriceCents: 1200},
 		{ReceiptID: 12, PurchaseDate: "2026-02-20", MerchantID: 8, MerchantName: "corner_grocer", UnitPriceCents: 1100},
 	}}
-	out, isErr := call(t, fq, "where_bought", `{"product_id":1}`)
-	if isErr {
-		t.Fatal(out)
+	out, isErr := call(t, fq, "where_bought", `{"product_id":1,"limit":5}`)
+	if isErr || fq.wbLimit != 5 || out["locations"].([]any)[0].(map[string]any)["last_date"] != "2026-02-20" {
+		t.Fatalf("where_bought %v", out)
 	}
-	locs := out["locations"].([]any)
-	if len(locs) != 2 {
-		t.Fatalf("locations %v", locs)
-	}
-	l0, l1 := locs[0].(map[string]any), locs[1].(map[string]any)
-	if l0["merchant_name"] != "corner_grocer" || l1["purchases"] != 2.0 || l1["last_date"] != "2026-02-01" ||
-		l1["last_unit_price_cents"] != 1200.0 || len(l1["receipt_ids"].([]any)) != 2 {
-		t.Fatalf("locations %v", locs)
-	}
-	if ids := out["receipt_ids"].([]any); len(ids) != 3 || ids[0] != 12.0 {
+	if ids := out["receipt_ids"].([]any); len(ids) != 3 || ids[0] != 10.0 {
 		t.Fatalf("ids %v", ids)
 	}
 	out, _ = call(t, fq, "price_history", `{"product_id":1,"merchant":"Trader Joe's"}`)
 	if len(out["purchases"].([]any)) != 3 || out["merchant"].(map[string]any)["id"] != 7.0 {
 		t.Fatalf("history %v", out)
 	}
-	out, _ = call(t, fq, "search_purchases", `{"query":"coffee","from":"2026-01-01","to":"2026-02-28","limit":2}`)
-	if fq.searchF.Limit != 2 || fq.searchF.From != "2026-01-01" || out["truncated"] != true {
+	out, _ = call(t, fq, "search_purchases", `{"query":"coffee","from":"2026-01-01","to":"2026-02-28","limit":3}`)
+	if fq.searchF.Limit != 3 || fq.searchF.From != "2026-01-01" || out["truncated"] != false {
+		t.Fatalf("search exactly limit rows must not be truncated %v %+v", out, fq.searchF)
+	}
+	fq.truncated = true
+	out, _ = call(t, fq, "search_purchases", `{"query":"coffee","limit":3}`)
+	if out["truncated"] != true {
 		t.Fatalf("search %v %+v", out, fq.searchF)
 	}
 	out, _ = call(t, fq, "search_products", `{"query":"coff"}`)
@@ -174,3 +177,4 @@ func TestToolResultsCarryReceiptIDs(t *testing.T) {
 		t.Fatalf("merchants %v", out)
 	}
 }
+

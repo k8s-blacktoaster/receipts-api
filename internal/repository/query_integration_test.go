@@ -74,21 +74,21 @@ func TestQueryRepository(t *testing.T) {
 	}
 
 	// search purchases: case-insensitive, merchant + date filters, failed excluded.
-	lines, err := q.SearchPurchases(ctx, PurchaseFilter{Query: "Coffee"})
+	lines, _, err := q.SearchPurchases(ctx, PurchaseFilter{Query: "Coffee"})
 	if err != nil || len(lines) != 3 || lines[0].ReceiptID != int64(r3.ID) || lines[0].PurchaseDate != "2026-02-20" {
 		t.Fatalf("search %+v %v", lines, err)
 	}
-	lines, _ = q.SearchPurchases(ctx, PurchaseFilter{Query: "coffee", MerchantID: tj, From: "2026-02-01"})
+	lines, _, _ = q.SearchPurchases(ctx, PurchaseFilter{Query: "coffee", MerchantID: tj, From: "2026-02-01"})
 	if len(lines) != 1 || lines[0].ReceiptID != int64(r2.ID) {
 		t.Fatalf("filtered search %+v", lines)
 	}
 
 	// price history oldest first.
-	h, err := q.PriceHistory(ctx, coffee.ID, 0, 0)
+	h, _, err := q.PriceHistory(ctx, coffee.ID, 0, 0)
 	if err != nil || len(h) != 3 || h[0].UnitPriceCents != 1000 || h[2].UnitPriceCents != 1100 {
 		t.Fatalf("history %+v %v", h, err)
 	}
-	h, _ = q.PriceHistory(ctx, coffee.ID, cg, 0)
+	h, _, _ = q.PriceHistory(ctx, coffee.ID, cg, 0)
 	if len(h) != 1 {
 		t.Fatalf("history by merchant %+v", h)
 	}
