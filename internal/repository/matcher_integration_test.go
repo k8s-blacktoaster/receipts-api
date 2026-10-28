@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"receipts-db/internal/models"
@@ -120,32 +121,68 @@ func TestMatcherAliasFuzzyScopeAndManual(t *testing.T) {
 	}
 }
 
-// Exact alias matching ignores case, punctuation and whitespace runs (merchant_name_key).
-func TestMatcherNormalizesAliasText(t *testing.T) {
+// Exact alias matching ignores only case and whitespace runs (item_alias_key); punctuation is
+// significant, so sizes/fractions never collapse. QA repros must not match.
+func TestMatcherAliasKeyConservative(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
 	products, receipts := NewProductRepository(db), NewReceiptRepository(db)
-	_, ids := seedCatalog(t, ctx, products, receipts, 2) // alias "ACME ITEM 1"
-	r := &models.Receipt{StoreName: "Acme", Date: "2026-02-01", Source: models.SourceManual, Items: []models.ReceiptItem{
-		{Name: "acme.  item-1", Quantity: 1}, {Name: "  ACME_ITEM 1 ", Quantity: 1}, {Name: "!!", Quantity: 1}}}
+	seed := &models.Receipt{StoreName: "Acme", Date: "2026-01-01", Source: models.SourceManual, Items: []models.ReceiptItem{{Name: "seed", Quantity: 1}}}
+	if err := receipts.Create(ctx, seed); err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]int64{}
+	for _, a := range []string{"MILK 1/2 GAL", "SODA 1.5L", "COKE 2L"} {
+		p := &models.Product{CanonicalName: a}
+		_ = products.CreateProduct(ctx, p)
+		if err := products.UpsertAlias(ctx, &models.ProductAlias{ProductID: p.ID, MerchantID: seed.MerchantID, AliasText: a}); err != nil {
+			t.Fatal(err)
+		}
+		ids[a] = p.ID
+	}
+	cases := []struct {
+		line, want string // want alias text when an exact match is expected, "" = no exact match
+	}{
+		{"milk 1/2 gal", "MILK 1/2 GAL"}, {"  MILK   1/2\tGAL ", "MILK 1/2 GAL"}, {"Soda 1.5l", "SODA 1.5L"},
+		{"MILK 12 GAL", ""}, {"SODA 15L", ""}, {"SODA 1,5L", ""}, {"COKE-2L", ""},
+	}
+	r := &models.Receipt{StoreName: "Acme", Date: "2026-02-01", Source: models.SourceManual}
+	for _, c := range cases {
+		r.Items = append(r.Items, models.ReceiptItem{Name: strings.ReplaceAll(c.line, "\\t", "\t"), Quantity: 1})
+	}
 	if err := receipts.Create(ctx, r); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := receipts.GetByID(ctx, r.ID)
-	for _, it := range got.Items[:2] {
-		if it.ProductID == nil || *it.ProductID != ids[1] || it.MatchSource != "exact" {
-			t.Errorf("%q not matched exactly: %+v", it.Name, it)
+	for i, c := range cases {
+		it := got.Items[i]
+		if c.want != "" {
+			if it.ProductID == nil || *it.ProductID != ids[c.want] || it.MatchSource != "exact" {
+				t.Errorf("%q should match %q exactly: %+v", c.line, c.want, it)
+			}
+		} else if it.ProductID != nil {
+			t.Errorf("%q must not auto-map: %+v", c.line, it)
 		}
 	}
-	if got.Items[2].ProductID != nil {
-		t.Errorf("punctuation-only line matched: %+v", got.Items[2])
+	coke := got.Items[6]
+	if coke.SuggestedProductID == nil || *coke.SuggestedProductID != ids["COKE 2L"] || coke.MatchSource != "fuzzy" {
+		t.Errorf("COKE-2L should be a fuzzy suggestion for COKE 2L: %+v", coke)
 	}
-	// A review correction propagates to differently punctuated lines too.
+	// Correction propagation uses the same key: "MILK 12 GAL" is not re-pointed by mapping
+	// "milk  1/2 gal", and learning a new text never re-points the COKE 2L alias.
 	r2 := &models.Receipt{StoreName: "Acme", Date: "2026-02-02", Source: models.SourceManual, Items: []models.ReceiptItem{
-		{Name: "Choc. Milk", Quantity: 1}, {Name: "choc milk", Quantity: 1}}}
+		{Name: "Choc Milk 1/2", Quantity: 1}, {Name: "choc  MILK 1/2", Quantity: 1}, {Name: "choc milk 12", Quantity: 1}}}
 	_ = receipts.Create(ctx, r2)
-	res, err := products.MapItem(ctx, int64(r2.Items[0].ID), ids[0], nil)
+	res, err := products.MapItem(ctx, int64(r2.Items[0].ID), ids["MILK 1/2 GAL"], nil)
 	if err != nil || res.AlsoMapped != 1 {
 		t.Fatalf("propagation: %+v %v", res, err)
+	}
+	if _, err := products.MapItem(ctx, int64(got.Items[6].ID), ids["SODA 1.5L"], nil); err != nil {
+		t.Fatal(err)
+	}
+	var cokeAlias int64
+	_ = db.QueryRowContext(ctx, `SELECT product_id FROM product_aliases WHERE alias_text = 'COKE 2L'`).Scan(&cokeAlias)
+	if cokeAlias != ids["COKE 2L"] {
+		t.Fatalf("COKE 2L alias re-pointed to %d", cokeAlias)
 	}
 }

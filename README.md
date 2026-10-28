@@ -113,7 +113,8 @@ scoped to the receipt's merchant:
 2. merchant UPC (`product_aliases.upc`, unique per merchant) -> `upc`. UPCs must be 8, 12, 13 or
    14 digits (400 otherwise); codes read by the model are cleaned and dropped if invalid.
 3. printed text (`raw_text`, then `name`) against the merchant's aliases, compared with
-   `merchant_name_key` (case, punctuation and whitespace ignored) -> `exact`
+   `item_alias_key` (lowercase, whitespace runs collapsed; ALL punctuation kept, so "1/2" != "12"
+   and "1.5L" != "1,5L") -> `exact`. Near misses like "COKE-2L" vs "COKE 2L" are fuzzy suggestions.
 4. pg_trgm similarity >= 0.4 over the merchant's aliases and all canonical names -> **suggestion
    only** (`suggested_product_id`, `match_confidence`); the line stays unmapped and appears in the
    review queue.

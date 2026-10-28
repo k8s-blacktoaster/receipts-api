@@ -66,11 +66,11 @@ func matchItem(ctx context.Context, q txExec, merchantID int64, it *models.Recei
 	texts := itemTexts(it)
 	if merchantID != 0 {
 		for _, t := range texts {
-			if models.NormalizeMerchantName(t) == "" {
+			if models.ItemAliasKey(t) == "" {
 				continue
 			}
 			id, ok, err := one(`SELECT product_id FROM product_aliases
-				WHERE merchant_id = $1 AND merchant_name_key(alias_text) = merchant_name_key($2) ORDER BY id LIMIT 1`, merchantID, t)
+				WHERE merchant_id = $1 AND item_alias_key(alias_text) = item_alias_key($2) ORDER BY id LIMIT 1`, merchantID, t)
 			if err != nil {
 				return fmt.Errorf("match alias: %w", err)
 			}

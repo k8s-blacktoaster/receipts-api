@@ -164,3 +164,18 @@ func TestMerchantTrigramIndexAndSimilarity(t *testing.T) {
 		t.Fatalf("best=%q sim=%v", best, sim)
 	}
 }
+
+func TestItemAliasKeySQLGoParity(t *testing.T) {
+	db := testDB(t)
+	inputs := []string{"MILK 1/2 GAL", "  Soda\t 1.5L  ", "SODA 1,5L", "COKE-2L", "a\u00a0\u00a0b", "X__Y", "Ben & Jerry's",
+		"ÉCLAIR 2CT", "", "   ", "!!", "line\r\nbreak", "tab\vvt\fff", "Ünited—“quotes”", "[brackets]\\back"}
+	for _, in := range inputs {
+		var sqlKey string
+		if err := db.QueryRow(`SELECT item_alias_key($1)`, in).Scan(&sqlKey); err != nil {
+			t.Fatal(err)
+		}
+		if goKey := models.ItemAliasKey(in); sqlKey != goKey {
+			t.Errorf("%q: sql=%q go=%q", in, sqlKey, goKey)
+		}
+	}
+}

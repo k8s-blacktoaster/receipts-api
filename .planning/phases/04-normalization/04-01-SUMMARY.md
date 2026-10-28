@@ -28,7 +28,7 @@
 - Merge never folds a numbered store by address; both stores are kept.
 - UPCs: 8/12/13/14 digits (model + API), migration 011 per-merchant unique `product_aliases.upc`
   (invalid products.upc cleared; duplicates keep the oldest alias's UPC), matching per merchant.
-- Exact alias matching uses merchant_name_key (migration 012 index).
+- Exact alias matching uses item_alias_key (case + whitespace only, punctuation kept; Go twin models.ItemAliasKey; migration 012).
 
 ## Conservative choices (open questions)
 - Fuzzy matches never auto-map; LLM suggestions are not implemented (no live calls; `llm` reserved).
