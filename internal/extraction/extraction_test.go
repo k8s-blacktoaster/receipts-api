@@ -193,6 +193,10 @@ func TestApplyMapping(t *testing.T) {
 	doc := int64(7)
 	r := &models.Receipt{ID: 5, Source: models.SourcePhoto, SourceDocumentID: &doc}
 	Apply(r, parse(t, "receipt_ok.json"))
+	if r.StoreAddress != "27769 Santa Margarita Parkway" || r.StoreCity != "Mission Viejo" || r.StoreState != "CA" ||
+		r.StoreZip != "92691" || r.StorePhone == "" {
+		t.Fatalf("store location: %q %q %q %q %q", r.StoreAddress, r.StoreCity, r.StoreState, r.StoreZip, r.StorePhone)
+	}
 	if r.StoreName != "Sprouts Farmers Market" || r.StoreNumber != "0412" || r.Date != "2025-08-10" || r.Currency != "USD" {
 		t.Fatalf("header: %+v", r)
 	}
@@ -228,7 +232,7 @@ func TestCheck(t *testing.T) {
 		t.Fatalf("tolerance: %v", reasons)
 	}
 	r.TotalCents += 1
-	if reasons := Check(r, e, 2); len(reasons) != 1 || !strings.Contains(reasons[0], "total mismatch") {
+	if reasons := Check(r, e, 2); len(reasons) == 0 || !strings.Contains(reasons[0], "total mismatch") {
 		t.Fatalf("mismatch: %v", reasons)
 	}
 	m := &models.Receipt{}

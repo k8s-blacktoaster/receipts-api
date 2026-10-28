@@ -2,6 +2,8 @@ package extraction
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 
 	"receipts-db/internal/models"
 )
@@ -25,6 +27,8 @@ func Check(r *models.Receipt, e *Extracted, tol int64) []string {
 	var reasons []string
 	if models.NormalizeMerchantName(r.StoreName) == "" {
 		reasons = append(reasons, "missing merchant name")
+	} else if why := merchantLooksLikeLocation(r); why != "" {
+		reasons = append(reasons, "merchant name "+strconvQuote(r.StoreName)+" looks like the store location ("+why+")")
 	}
 	if r.Date == "" {
 		reasons = append(reasons, "missing or invalid purchase date")
@@ -58,5 +62,103 @@ func Check(r *models.Receipt, e *Extracted, tol int64) []string {
 				r.SubtotalCents, r.TaxCents, r.SavingsCents, adj, base-r.SavingsCents, r.TotalCents))
 		}
 	}
+	reasons = append(reasons, checkItems(r, tol)...)
 	return reasons
 }
+
+// discountName matches item names that look like a discount/savings line rather than a product.
+// It is applied to the name, and to raw_text only when the item carries no discount (a correct
+// item's raw_text may legitimately include the discount line that was folded into it).
+var discountName = regexp.MustCompile(`(?i)\b(savings?|discount|coupon|instant\s*sav|markdown|you\s*saved)\b|\d+[.,]\d{2}\s*-\s*$|(^|\s)/\s*\d+|^[\d\s/]+$`)
+
+// checkItems reconciles line items against the subtotal and flags lines that look misread.
+// Generic (merchant-agnostic): sum(line_total) - sum(discount) + adjustments must equal the
+// subtotal within tol (adjustments may also sit after the subtotal, so subtotal without them
+// is accepted too, as is a pre-discount subtotal whose total then reflects the discounts).
+func checkItems(r *models.Receipt, tol int64) []string {
+	if len(r.Items) == 0 {
+		return nil
+	}
+	var reasons []string
+	var lines, disc, adj int64
+	for i, it := range r.Items {
+		lines += it.LineTotalCents
+		disc += it.DiscountCents
+		if !it.IsReturn && (it.LineTotalCents < 0 || it.UnitPriceCents < 0) {
+			reasons = append(reasons, fmt.Sprintf("item %d %q has a negative price", i+1, it.Name))
+		}
+		if discountName.MatchString(it.Name) || (it.DiscountCents == 0 && discountName.MatchString(it.RawText)) {
+			reasons = append(reasons, fmt.Sprintf("item %d %q looks like a discount line, not a product", i+1, it.Name))
+		}
+	}
+	for _, a := range r.Adjustments {
+		adj += a.AmountCents
+		if a.Kind == "deposit" || a.Kind == "fee" {
+			for i, it := range r.Items {
+				if it.LineTotalCents == a.AmountCents && sharesWord(it.Name+" "+it.RawText, a.RawText) {
+					reasons = append(reasons, fmt.Sprintf("%s %d also appears as item %d %q (counted twice)", a.Kind, a.AmountCents, i+1, it.Name))
+					break
+				}
+			}
+		}
+	}
+	net := lines - disc
+	// Some receipts print the subtotal before discounts and take them off after it; then the
+	// total must show them (this keeps a discount that was also netted into line_total flagged).
+	grossForm := disc+(-sumReducing(r)) > 0 && within(lines, r.SubtotalCents, tol) &&
+		within(r.SubtotalCents+r.TaxCents-disc+sumReducing(r), r.TotalCents, tol)
+	if r.SubtotalCents > 0 && !within(net+adj, r.SubtotalCents, tol) && !within(net, r.SubtotalCents, tol) && !grossForm {
+		reasons = append(reasons, fmt.Sprintf(
+			"items don't reconcile: line totals %d - discounts %d + adjustments %d = %d, printed subtotal %d (off by %d)",
+			lines, disc, adj, net+adj, r.SubtotalCents, net+adj-r.SubtotalCents))
+	}
+	if r.SavingsCents > 0 && !within(r.SavingsCents, disc-sumReducing(r), tol) {
+		for i, it := range r.Items {
+			if it.LineTotalCents == r.SavingsCents {
+				reasons = append(reasons, fmt.Sprintf("savings %d equals the price of item %d %q (likely copied, not a printed savings line)", r.SavingsCents, i+1, it.Name))
+				break
+			}
+		}
+	}
+	return reasons
+}
+
+func sumReducing(r *models.Receipt) int64 {
+	var s int64
+	for _, a := range r.Adjustments {
+		if a.AmountCents < 0 {
+			s += a.AmountCents
+		}
+	}
+	return s
+}
+
+func sharesWord(a, b string) bool {
+	words := strings.FieldsFunc(strings.ToLower(b), func(c rune) bool { return !(c >= 'a' && c <= 'z') })
+	a = strings.ToLower(a)
+	for _, w := range words {
+		if len(w) >= 3 && strings.Contains(a, w) {
+			return true
+		}
+	}
+	return false
+}
+
+var storeNumberLike = regexp.MustCompile(`#\s*\d+|(?i)\b(store|branch|location)\s*#?\s*\d+`)
+
+// merchantLooksLikeLocation catches a branch line used as the merchant (generic: compares with
+// the receipt's own store fields, no brand list).
+func merchantLooksLikeLocation(r *models.Receipt) string {
+	key := models.NormalizeMerchantName(r.StoreName)
+	switch {
+	case storeNumberLike.MatchString(r.StoreName):
+		return "contains a store number"
+	case r.StoreCity != "" && key == models.NormalizeMerchantName(r.StoreCity):
+		return "same as the store city"
+	case r.StoreAddress != "" && key == models.NormalizeMerchantName(r.StoreAddress):
+		return "same as the store address"
+	}
+	return ""
+}
+
+func strconvQuote(s string) string { return fmt.Sprintf("%q", s) }

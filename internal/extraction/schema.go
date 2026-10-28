@@ -7,13 +7,35 @@ const SystemPrompt = `You extract data from photos of retail receipts from any m
 Return only JSON matching the schema. Rules:
 - All money is integer cents (e.g. $12.34 -> 1234). Never use decimals for money.
 - Use null for anything not printed or unreadable; do not guess.
-- merchant_name is the chain/brand as printed (e.g. "Trader Joe's"), not the legal entity.
+- merchant_name is the brand / chain name only, the way a customer would name the store
+  (e.g. "Trader Joe's"), not the legal entity. Drop generic words that describe the business
+  type or legal form when they are printed next to the brand (e.g. "Acme Wholesale" -> "Acme",
+  "Acme Supermarket Inc." -> "Acme"), but keep words that are part of the brand itself.
+  Never use the branch / location line (city, "#123", street, "Store 45") as merchant_name;
+  that belongs in the store_* fields. If the logo is cut off, take the brand from other printed
+  text (header, footer, website, return policy, membership text); null only if no brand
+  appears anywhere on the receipt.
+- Store location, each copied as printed and null if absent: store_number (store/location id,
+  e.g. "#0412" -> "0412"), store_address (street line only), store_city, store_state (2-letter
+  US state or region code), store_zip, store_phone.
 - purchase_date is YYYY-MM-DD.
-- One items[] entry per printed line in order; quantity may be fractional for weighed goods.
-- discount_cents on an item is a POSITIVE amount taken off that line.
-- savings_cents is the receipt-level "you saved" total if printed, as a POSITIVE amount.
-- adjustments[]: receipt-level coupons/instant savings/discounts as NEGATIVE amount_cents;
-  deposits/fees/tips as POSITIVE amount_cents.
+- Every printed priced line appears exactly once: one items[] entry per purchased product, in
+  printed order. Do not skip lines (also check lines in shadow or near folds) and do not
+  invent or repeat lines. quantity may be fractional for weighed goods.
+- line_total_cents is the price printed on the product's own line, BEFORE any discount
+  (e.g. "2 @ 7.59" then "AVO CHIPS 15.18" -> quantity 2, unit 759, line_total 1518).
+- A discount / instant savings / coupon line that refers to an item (by item number, e.g.
+  "/ 1798566 3.20-", or simply the line right above it) is NOT an item: add it to that item's
+  discount_cents as a POSITIVE amount (3.20- -> 320). Never output such a line as its own item
+  and never subtract it from line_total_cents. Only a receipt-level discount that refers to no
+  item goes in adjustments[] (NEGATIVE amount_cents).
+- Deposits, bottle/redemption fees, bag fees and tips appear exactly once: either as an item
+  (if printed as its own priced line among the items) or in adjustments[] (POSITIVE
+  amount_cents), never both.
+- savings_cents only from a printed receipt-level savings line ("You saved", "Total savings",
+  "Instant savings total"). Never compute it and never copy an item price; null if not printed.
+- Check: sum(line_total_cents) - sum(discount_cents) + sum(adjustments) should equal the
+  printed subtotal. If it does not, re-read the lines before answering.
 - sku / item_number / upc: copy any printed identifiers exactly; null if absent.
 - confidence: your overall confidence 0..1 that totals and items are read correctly.`
 
@@ -44,7 +66,8 @@ func ReceiptJSONSchema() map[string]any {
 	})
 	return obj(map[string]any{
 		"merchant_name": nullable("string"), "store_number": nullable("string"), "store_address": nullable("string"),
-		"store_phone": nullable("string"), "purchase_date": nullable("string"), "purchase_time": nullable("string"),
+		"store_phone": nullable("string"), "store_city": nullable("string"), "store_state": nullable("string"),
+		"store_zip": nullable("string"), "purchase_date": nullable("string"), "purchase_time": nullable("string"),
 		"currency":       nullable("string"),
 		"subtotal_cents": nullable("integer"), "tax_cents": nullable("integer"), "total_cents": nullable("integer"),
 		"savings_cents": nullable("integer"), "payment_method": nullable("string"), "payment_last4": nullable("string"),

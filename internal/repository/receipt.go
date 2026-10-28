@@ -20,8 +20,21 @@ var ErrNotFound = errors.New("receipt not found")
 // (or the receipt changed status concurrently).
 var ErrInvalidTransition = errors.New("invalid receipt status transition")
 
-// ErrReceiptBusy is returned by Update while the receipt is being parsed (any body).
-var ErrReceiptBusy = errors.New("receipt is being parsed")
+// ErrIncomplete: the receipt lacks a merchant or date, which parsed/reviewed require
+// (CHECK receipts_complete_when_parsed).
+var ErrIncomplete = errors.New("receipt needs a merchant and a date for this status")
+
+func isIncomplete(err error) bool {
+	var pe *pq.Error
+	return errors.As(err, &pe) && pe.Constraint == "receipts_complete_when_parsed"
+}
+
+// ErrReceiptBusy is returned by edits while the receipt is queued for or undergoing
+// extraction (uploaded|parsing), and by Delete while parsing.
+var ErrReceiptBusy = errors.New("receipt is queued for or undergoing extraction")
+
+// ErrNoPhoto is returned by RequestReextract for a receipt without a source document.
+var ErrNoPhoto = errors.New("receipt has no photo")
 
 type ReceiptRepository interface {
 	Create(ctx context.Context, receipt *models.Receipt) error
@@ -32,6 +45,10 @@ type ReceiptRepository interface {
 	Count(ctx context.Context) (int, error)
 	// UpdateItem edits one parsed line item during review (marks edited_at).
 	UpdateItem(ctx context.Context, item *models.ReceiptItem) error
+	// RequestReextract moves a photo receipt in parsed|needs_review|failed|uploaded to "uploaded"
+	// (queued), so user edits are refused until the new parse lands. ErrReceiptBusy while
+	// parsing, ErrInvalidTransition for reviewed, ErrNoPhoto, ErrNotFound.
+	RequestReextract(ctx context.Context, id int) error
 	// ListIDsByStatus returns receipt ids in the given statuses, oldest first (worker recovery).
 	ListIDsByStatus(ctx context.Context, statuses ...string) ([]int, error)
 	// ClaimForParsing atomically moves a photo receipt into "parsing" if it is in a
@@ -66,10 +83,14 @@ type txExec interface {
 
 // resolveMerchantStore finds or creates the merchant (by models.NormalizeMerchantName key) and,
 // when a store number or address is given, the store location.
-func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt) error {
+// resolveMerchantStore links the receipt to merchant/store. With keepMerchant (an edit that did
+// not change the printed store name) the existing merchant_id is kept, so a merchant renamed in
+// the UI is not re-derived from the printed name.
+func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt, keepMerchant bool) error {
 	r.StoreName = strings.TrimSpace(r.StoreName) // as printed (legacy receipts.store_name)
 	r.StoreNumber = strings.TrimSpace(r.StoreNumber)
 	r.StoreAddress = strings.TrimSpace(r.StoreAddress)
+	r.StoreCity, r.StoreState, r.StoreZip = strings.TrimSpace(r.StoreCity), strings.TrimSpace(r.StoreState), strings.TrimSpace(r.StoreZip)
 	key := models.NormalizeMerchantName(r.StoreName)
 	if key == "" {
 		// photo receipts before/without a readable merchant: no merchant yet. The DB CHECK
@@ -77,12 +98,15 @@ func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt) erro
 		r.MerchantID, r.StoreID = 0, nil
 		return nil
 	}
-	err := q.QueryRowContext(ctx, `
+	var err error
+	if !(keepMerchant && r.MerchantID != 0) {
+		err = q.QueryRowContext(ctx, `
 		INSERT INTO merchants (name, category) VALUES ($1, $2)
 		ON CONFLICT (name) DO UPDATE SET category = COALESCE(merchants.category, EXCLUDED.category)
 		RETURNING id`, key, nullStr(r.StoreCategory)).Scan(&r.MerchantID)
-	if err != nil {
-		return fmt.Errorf("failed to resolve merchant: %w", err)
+		if err != nil {
+			return fmt.Errorf("failed to resolve merchant: %w", err)
+		}
 	}
 	if r.StoreNumber == "" && r.StoreAddress == "" {
 		r.StoreID = nil
@@ -91,17 +115,26 @@ func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt) erro
 	var id int64
 	if r.StoreNumber != "" {
 		err = q.QueryRowContext(ctx, `
-			INSERT INTO stores (merchant_id, store_number, address, phone) VALUES ($1, $2, $3, $4)
+			INSERT INTO stores (merchant_id, store_number, address, phone, city, region, postal_code)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (merchant_id, store_number) WHERE store_number IS NOT NULL
 			DO UPDATE SET address = COALESCE(EXCLUDED.address, stores.address),
-			              phone = COALESCE(EXCLUDED.phone, stores.phone)
-			RETURNING id`, r.MerchantID, r.StoreNumber, nullStr(r.StoreAddress), nullStr(r.StorePhone)).Scan(&id)
+			              phone = COALESCE(EXCLUDED.phone, stores.phone),
+			              city = COALESCE(EXCLUDED.city, stores.city),
+			              region = COALESCE(EXCLUDED.region, stores.region),
+			              postal_code = COALESCE(EXCLUDED.postal_code, stores.postal_code)
+			RETURNING id`, r.MerchantID, r.StoreNumber, nullStr(r.StoreAddress), nullStr(r.StorePhone),
+			nullStr(r.StoreCity), nullStr(r.StoreState), nullStr(r.StoreZip)).Scan(&id)
 	} else {
 		err = q.QueryRowContext(ctx, `
-			INSERT INTO stores (merchant_id, address, phone) VALUES ($1, $2, $3)
+			INSERT INTO stores (merchant_id, address, phone, city, region, postal_code) VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT (merchant_id, lower(address)) WHERE store_number IS NULL AND address IS NOT NULL
-			DO UPDATE SET phone = COALESCE(EXCLUDED.phone, stores.phone)
-			RETURNING id`, r.MerchantID, r.StoreAddress, nullStr(r.StorePhone)).Scan(&id)
+			DO UPDATE SET phone = COALESCE(EXCLUDED.phone, stores.phone),
+			              city = COALESCE(EXCLUDED.city, stores.city),
+			              region = COALESCE(EXCLUDED.region, stores.region),
+			              postal_code = COALESCE(EXCLUDED.postal_code, stores.postal_code)
+			RETURNING id`, r.MerchantID, r.StoreAddress, nullStr(r.StorePhone),
+			nullStr(r.StoreCity), nullStr(r.StoreState), nullStr(r.StoreZip)).Scan(&id)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to resolve store: %w", err)
@@ -111,8 +144,11 @@ func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt) erro
 }
 
 func insertChildren(ctx context.Context, q txExec, r *models.Receipt, now time.Time) error {
+	// Items are re-inserted on update, so remember old ids to re-point adjustments.
+	remap := map[int]int{}
 	for i := range r.Items {
 		it := &r.Items[i]
+		oldID := it.ID
 		it.ReceiptID = r.ID
 		it.CreatedAt, it.UpdatedAt = now, now
 		err := q.QueryRowContext(ctx, `
@@ -130,10 +166,20 @@ func insertChildren(ctx context.Context, q txExec, r *models.Receipt, now time.T
 		if err != nil {
 			return fmt.Errorf("failed to create receipt item: %w", err)
 		}
+		if oldID != 0 {
+			remap[oldID] = it.ID
+		}
 	}
 	for i := range r.Adjustments {
 		a := &r.Adjustments[i]
 		a.ReceiptID = r.ID
+		if a.AppliesToID != nil {
+			if nid, ok := remap[*a.AppliesToID]; ok {
+				a.AppliesToID = &nid
+			} else {
+				a.AppliesToID = nil // its item was removed in this edit; keep the adjustment unattached
+			}
+		}
 		if err := q.QueryRowContext(ctx, `
 			INSERT INTO receipt_adjustments (receipt_id, applies_to_item_id, kind, raw_text, amount_cents)
 			VALUES ($1,$2,$3,$4,$5) RETURNING id`,
@@ -161,7 +207,7 @@ func (r *receiptRepo) Create(ctx context.Context, receipt *models.Receipt) error
 
 func createReceiptTx(ctx context.Context, tx txExec, receipt *models.Receipt) error {
 	receipt.Normalize()
-	if err := resolveMerchantStore(ctx, tx, receipt); err != nil {
+	if err := resolveMerchantStore(ctx, tx, receipt, false); err != nil {
 		return err
 	}
 	now := time.Now()
@@ -189,7 +235,7 @@ func createReceiptTx(ctx context.Context, tx txExec, receipt *models.Receipt) er
 }
 
 const receiptCols = `
-	r.id, r.store_name, r.store_category, r.store_address, r.store_phone, s.store_number,
+	r.id, r.store_name, r.store_category, r.store_address, r.store_phone, s.store_number, s.city, s.region, s.postal_code,
 	to_char(r.date, 'YYYY-MM-DD'), r.purchased_at, r.merchant_id, r.store_id,
 	r.subtotal_cents, r.tax_cents, r.total_cents, r.savings_cents, r.currency,
 	r.payment_method, r.payment_last4, r.source, r.external_id, r.source_document_id,
@@ -202,9 +248,10 @@ func scanReceipt(s rowScanner) (*models.Receipt, error) {
 	var (
 		rc                                                 models.Receipt
 		name, cat, addr, phone, num, date, pm, last4, perr sql.NullString
+		city, region, zip                                  sql.NullString
 		merchant                                           sql.NullInt64
 	)
-	err := s.Scan(&rc.ID, &name, &cat, &addr, &phone, &num, &date, &rc.PurchasedAt,
+	err := s.Scan(&rc.ID, &name, &cat, &addr, &phone, &num, &city, &region, &zip, &date, &rc.PurchasedAt,
 		&merchant, &rc.StoreID, &rc.SubtotalCents, &rc.TaxCents, &rc.TotalCents, &rc.SavingsCents,
 		&rc.Currency, &pm, &last4, &rc.Source, &rc.ExternalID, &rc.SourceDocumentID,
 		&rc.MemberID, &rc.UploadedByID, &rc.Confidence, &rc.Status, &perr,
@@ -214,6 +261,7 @@ func scanReceipt(s rowScanner) (*models.Receipt, error) {
 	}
 	rc.StoreName, rc.Date, rc.MerchantID = name.String, date.String, merchant.Int64
 	rc.StoreCategory, rc.StoreAddress, rc.StorePhone, rc.StoreNumber = cat.String, addr.String, phone.String, num.String
+	rc.StoreCity, rc.StoreState, rc.StoreZip = city.String, region.String, zip.String
 	rc.PaymentMethod, rc.PaymentLast4, rc.ParseError = pm.String, last4.String, perr.String
 	return &rc, nil
 }
@@ -291,14 +339,16 @@ func (r *receiptRepo) Update(ctx context.Context, receipt *models.Receipt) error
 	// Status changes go through the same transition table as SetStatus. The row lock keeps a
 	// concurrent claim/SetStatus from slipping in between the check and the write.
 	var current string
-	if err := tx.QueryRowContext(ctx, `SELECT status FROM receipts WHERE id = $1 FOR UPDATE`, receipt.ID).Scan(&current); err != nil {
+	var oldName sql.NullString
+	var oldMerchant sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT status, store_name, merchant_id FROM receipts WHERE id = $1 FOR UPDATE`, receipt.ID).Scan(&current, &oldName, &oldMerchant); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
 		return fmt.Errorf("failed to load receipt status: %w", err)
 	}
-	if current == models.StatusParsing {
-		return ErrReceiptBusy // the worker owns it; its final write would race this edit
+	if models.EditLocked(current) {
+		return ErrReceiptBusy // a queued/running extraction would overwrite this edit
 	}
 	if requested == "" {
 		receipt.Status = current
@@ -306,7 +356,11 @@ func (r *receiptRepo) Update(ctx context.Context, receipt *models.Receipt) error
 		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, current, requested)
 	}
 
-	if err := writeReceiptTx(ctx, tx, receipt); err != nil {
+	keep := oldMerchant.Valid && models.NormalizeMerchantName(receipt.StoreName) == models.NormalizeMerchantName(oldName.String)
+	if keep {
+		receipt.MerchantID = oldMerchant.Int64
+	}
+	if err := writeReceiptTx(ctx, tx, receipt, keep); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -316,8 +370,8 @@ func (r *receiptRepo) Update(ctx context.Context, receipt *models.Receipt) error
 }
 
 // writeReceiptTx writes header fields and replaces children. Callers have locked the row.
-func writeReceiptTx(ctx context.Context, tx *sql.Tx, receipt *models.Receipt) error {
-	if err := resolveMerchantStore(ctx, tx, receipt); err != nil {
+func writeReceiptTx(ctx context.Context, tx *sql.Tx, receipt *models.Receipt, keepMerchant bool) error {
+	if err := resolveMerchantStore(ctx, tx, receipt, keepMerchant); err != nil {
 		return err
 	}
 	receipt.UpdatedAt = time.Now()
@@ -353,9 +407,26 @@ func (r *receiptRepo) UpdateItem(ctx context.Context, it *models.ReceiptItem) er
 	if it.LineTotalCents == 0 && it.UnitPriceCents != 0 {
 		it.LineTotalCents = it.ComputedLineTotalCents()
 	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+	var status string
+	err = tx.QueryRowContext(ctx, `SELECT r.status FROM receipts r JOIN receipt_items i ON i.receipt_id = r.id
+		WHERE i.id = $1 FOR UPDATE OF r`, it.ID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("failed to lock receipt: %w", err)
+	}
+	if models.EditLocked(status) {
+		return ErrReceiptBusy
+	}
 	now := time.Now()
 	it.EditedAt = &now
-	err := r.db.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		UPDATE receipt_items SET
 			line_no = $2, raw_text = $3, sku = $4, item_number = $5, upc = $6, product_id = $7, name = $8,
 			description = $9, quantity = $10, unit = $11, unit_price_cents = $12, line_total_cents = $13,
@@ -371,7 +442,7 @@ func (r *receiptRepo) UpdateItem(ctx context.Context, it *models.ReceiptItem) er
 	if err != nil {
 		return fmt.Errorf("failed to update item: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (r *receiptRepo) SetStatus(ctx context.Context, id int, status, parseError string, reviewerID *int64) error {
@@ -388,6 +459,9 @@ func (r *receiptRepo) SetStatus(ctx context.Context, id int, status, parseError 
 			reviewed_at = CASE WHEN $2 = 'reviewed' THEN now() ELSE reviewed_at END,
 			reviewed_by_id = CASE WHEN $2 = 'reviewed' THEN $4 ELSE reviewed_by_id END
 		WHERE id = $1 AND status = ANY($5)`, id, status, nullStr(parseError), reviewerID, pq.Array(from))
+	if isIncomplete(err) {
+		return ErrIncomplete
+	}
 	if err != nil {
 		return fmt.Errorf("failed to set status: %w", err)
 	}
@@ -438,7 +512,7 @@ func (r *receiptRepo) CompleteParse(ctx context.Context, rc *models.Receipt, tok
 		return fmt.Errorf("failed to lock receipt: %w", err)
 	}
 	rc.Status = status
-	if err := writeReceiptTx(ctx, tx, rc); err != nil {
+	if err := writeReceiptTx(ctx, tx, rc, false); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE receipts SET parse_error = $2, parsed_at = now() WHERE id = $1`, rc.ID, nullStr(reason)); err != nil {
@@ -492,14 +566,51 @@ func (r *receiptRepo) ResetStaleParsing(ctx context.Context, olderThan time.Dura
 }
 
 func (r *receiptRepo) Delete(ctx context.Context, id int) error {
-	res, err := r.db.ExecContext(ctx, `DELETE FROM receipts WHERE id = $1`, id)
+	// Refused while a worker holds the claim; a queued (uploaded) receipt may be deleted, its
+	// job then finds no claimable row.
+	res, err := r.db.ExecContext(ctx, `DELETE FROM receipts WHERE id = $1 AND status <> 'parsing'`, id)
 	if err != nil {
 		return fmt.Errorf("failed to delete receipt: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
+		var st string
+		if err := r.db.QueryRowContext(ctx, `SELECT status FROM receipts WHERE id = $1`, id).Scan(&st); err == nil {
+			return ErrReceiptBusy
+		}
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (r *receiptRepo) RequestReextract(ctx context.Context, id int) error {
+	var got int
+	err := r.db.QueryRowContext(ctx, `
+		UPDATE receipts SET status = 'uploaded', parse_error = NULL
+		WHERE id = $1 AND source_document_id IS NOT NULL
+		  AND status IN ('uploaded','parsed','needs_review','failed')
+		RETURNING id`, id).Scan(&got)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("failed to request re-extract: %w", err)
+	}
+	var st string
+	var doc sql.NullInt64
+	if err := r.db.QueryRowContext(ctx, `SELECT status, source_document_id FROM receipts WHERE id = $1`, id).Scan(&st, &doc); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	switch {
+	case !doc.Valid:
+		return ErrNoPhoto
+	case st == models.StatusParsing:
+		return ErrReceiptBusy
+	default:
+		return fmt.Errorf("%w: %s -> uploaded", ErrInvalidTransition, st)
+	}
 }
 
 func (r *receiptRepo) List(ctx context.Context, limit, offset int) ([]*models.Receipt, error) {

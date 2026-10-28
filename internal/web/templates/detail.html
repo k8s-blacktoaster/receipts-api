@@ -1,0 +1,55 @@
+{{define "head"}}{{if pending .Receipt.Status}}<meta http-equiv="refresh" content="5">{{end}}{{end}}
+{{define "content"}}{{with .Receipt}}
+<div class="detail">
+  {{if .SourceDocumentID}}<figure class="photo"><a href="/receipts/{{.ID}}/image" target="_blank"><img src="/receipts/{{.ID}}/image" alt="Receipt photo"></a></figure>{{end}}
+  <section class="fields">
+    <p><span class="badge s-{{.Status}}">{{statusLabel .Status}}</span>
+      {{if pending .Status}}<span class="hint">Extraction pending; this page refreshes. Editing is locked.</span>{{end}}</p>
+    {{if .ParseError}}<div class="banner warn">{{if eq .Status "needs_review"}}Needs review: {{else}}Extraction error: {{end}}{{.ParseError}}</div>{{end}}
+    <form method="post" action="/receipts/{{.ID}}" class="edit">
+      <fieldset {{if pending .Status}}disabled{{end}}>
+      <label>Store <input name="store_name" value="{{.StoreName}}" required></label>
+      {{if or .StoreNumber .StoreAddress .StoreCity}}<p class="hint">{{with .StoreNumber}}Store #{{.}} · {{end}}{{.StoreAddress}}{{with .StoreCity}}, {{.}}{{end}} {{.StoreState}} {{.StoreZip}}{{with .StorePhone}} · {{.}}{{end}}</p>{{end}}
+      <label>Date <input type="date" name="date" value="{{.Date}}" required></label>
+      <div class="row">
+        <label>Subtotal <input name="subtotal" inputmode="decimal" value="{{money .SubtotalCents}}"></label>
+        <label>Tax <input name="tax" inputmode="decimal" value="{{money .TaxCents}}"></label>
+      </div>
+      <div class="row">
+        <label>Total <input name="total" inputmode="decimal" value="{{money .TotalCents}}"></label>
+        <label>Savings <input name="savings" inputmode="decimal" value="{{money .SavingsCents}}"></label>
+      </div>
+      <label>Payment <input name="payment_method" value="{{.PaymentMethod}}"></label>
+      <h3>Items</h3>
+      <table class="items" id="items">
+        <thead><tr><th>Item</th><th>Qty</th><th>Price</th><th>Line</th><th>Disc.</th><th>Remove</th></tr></thead>
+        <tbody>
+        {{range $i, $_ := .Items}}<tr>
+          <td><input name="item_name" value="{{.Name}}" aria-label="Item name"></td>
+          <td><input name="item_qty" inputmode="decimal" value="{{qty .Quantity}}" aria-label="Quantity"></td>
+          <td><input name="item_price" inputmode="decimal" value="{{money .UnitPriceCents}}" aria-label="Unit price"></td>
+          <td><input name="item_total" inputmode="decimal" value="{{money .LineTotalCents}}" aria-label="Line total"></td>
+          <td><input name="item_discount" inputmode="decimal" value="{{money .DiscountCents}}" aria-label="Discount"></td>
+          <td><input type="checkbox" name="item_remove" value="{{$i}}" aria-label="Remove item"></td>
+        </tr>{{end}}
+        <tr class="new"><td><input name="item_name" placeholder="New item" aria-label="New item name"></td>
+          <td><input name="item_qty" inputmode="decimal" placeholder="1"></td><td><input name="item_price" inputmode="decimal"></td>
+          <td><input name="item_total" inputmode="decimal"></td><td><input name="item_discount" inputmode="decimal"></td><td></td></tr>
+        </tbody>
+      </table>
+      <p class="hint">Tick Remove to delete an item. <button type="button" class="link" data-add-row>+ row</button></p>
+      {{if .Adjustments}}<h3>Adjustments</h3><ul class="adj">{{range .Adjustments}}<li>{{.Kind}} {{.RawText}} ${{money .AmountCents}}</li>{{end}}</ul>{{end}}
+      <div class="actions">
+        <button type="submit" class="btn">Save</button>
+        {{if approvable .Status}}<button type="submit" name="approve" value="1" class="btn primary">Save &amp; approve</button>{{end}}
+      </div>
+      </fieldset>
+    </form>
+    <div class="actions">
+      {{if approvable .Status}}<form method="post" action="/receipts/{{.ID}}/approve"><button class="btn primary">Approve as is</button></form>{{end}}
+      {{if reextractable .}}<form method="post" action="/receipts/{{.ID}}/extract" data-confirm="Re-extract and overwrite the parsed fields and items?"><button class="btn">Re-extract</button></form>{{end}}
+    </div>
+    {{if eq .Status "reviewed"}}<p class="hint">Reviewed{{if .ReviewedAt}} {{.ReviewedAt.Format "2006-01-02 15:04"}}{{end}}. Re-extract is disabled for reviewed receipts.</p>{{end}}
+  </section>
+</div>
+{{end}}{{end}}

@@ -1,20 +1,17 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"image"
-	_ "image/jpeg" // register decoders for validateImage
-	_ "image/png"
 	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"receipts-db/internal/imaging"
 	"receipts-db/internal/models"
 	"receipts-db/internal/repository"
 	"receipts-db/internal/storage"
@@ -22,28 +19,6 @@ import (
 
 // DefaultMaxUploadBytes matches xAI's 20 MiB image limit.
 const DefaultMaxUploadBytes = 20 << 20
-
-// allowedImageTypes: formats the vision provider accepts (xAI: jpeg, png).
-var allowedImageTypes = map[string]string{"image/jpeg": ".jpg", "image/png": ".png"}
-
-// maxImagePixels bounds decoded image size (decompression-bomb guard); ~50 MP.
-const maxImagePixels = 50_000_000
-
-// validateImage fully decodes the image so truncated or corrupt JPEG/PNG files are rejected
-// before anything is written or sent to a provider.
-func validateImage(data []byte) error {
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil {
-		return errors.New("Corrupt or unreadable image")
-	}
-	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > maxImagePixels {
-		return errors.New("Image dimensions out of range")
-	}
-	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
-		return errors.New("Corrupt or truncated image")
-	}
-	return nil
-}
 
 // Enqueuer schedules extraction for a receipt.
 type Enqueuer interface{ Enqueue(receiptID int) bool }
@@ -58,6 +33,23 @@ type UploadStore interface {
 // ReceiptLookup is used by the re-extract endpoint.
 type ReceiptLookup interface {
 	GetByID(ctx context.Context, id int) (*models.Receipt, error)
+	RequestReextract(ctx context.Context, id int) error
+}
+
+// ReextractError maps a RequestReextract error to an HTTP status and message (shared with the web UI).
+func ReextractError(err error) (int, string) {
+	switch {
+	case errors.Is(err, repository.ErrNotFound):
+		return http.StatusNotFound, "Receipt not found"
+	case errors.Is(err, repository.ErrNoPhoto):
+		return http.StatusBadRequest, "Receipt has no photo"
+	case errors.Is(err, repository.ErrReceiptBusy):
+		return http.StatusConflict, "Extraction already in progress"
+	case errors.Is(err, repository.ErrInvalidTransition):
+		return http.StatusConflict, "Receipt is reviewed; re-extraction is not allowed (v1 has no force option)"
+	default:
+		return http.StatusInternalServerError, "Failed to queue extraction"
+	}
 }
 
 type UploadHandler struct {
@@ -67,6 +59,10 @@ type UploadHandler struct {
 	Queue    Enqueuer
 	MaxBytes int64
 	Logger   *slog.Logger
+	// HEIC decodes HEIC/HEIF uploads (nil: HEIC gets 415 with guidance).
+	HEIC imaging.HEICDecoder
+	// KeepOriginal also stores the original upload (KEEP_ORIGINAL_UPLOADS, default false).
+	KeepOriginal bool
 }
 
 func (h *UploadHandler) respond(w http.ResponseWriter, code int, msg string, data any) {
@@ -93,18 +89,18 @@ func optionalID(r *http.Request, field string) (*int64, error) {
 // UploadReceiptPhoto handles POST /api/v1/uploads
 //
 //	@Summary		Upload a receipt photo
-//	@Description	Stores the image, creates a receipt with status "uploaded" and queues extraction. An identical image (same SHA-256) returns the existing receipt with 200.
+//	@Description	Converts the image to one normalized, metadata-free JPEG (orientation applied, long edge <= 2000 px), stores it, creates a receipt with status "uploaded" and queues extraction. An identical original file (same SHA-256 of the uploaded bytes) returns the existing receipt with 200.
 //	@Tags			uploads
 //	@Accept			multipart/form-data
 //	@Produce		json
-//	@Param			image			formData	file	true	"Receipt photo (image/jpeg or image/png, max 20 MiB)"
+//	@Param			image			formData	file	true	"Receipt photo (JPEG, PNG or HEIC/HEIF, max 20 MiB)"
 //	@Param			uploaded_by_id	formData	int		false	"Member who uploaded the photo"
 //	@Param			member_id		formData	int		false	"Member whose purchase this is"
 //	@Success		202				{object}	models.SuccessResponse{data=models.UploadResult}	"Accepted; extraction queued"
 //	@Success		200				{object}	models.SuccessResponse{data=models.UploadResult}	"Duplicate image; existing receipt"
 //	@Failure		400				{object}	models.ErrorResponse	"Bad request"
 //	@Failure		413				{object}	models.ErrorResponse	"Image too large"
-//	@Failure		415				{object}	models.ErrorResponse	"Unsupported image type"
+//	@Failure		415				{object}	models.ErrorResponse	"Unsupported image type, or HEIC when the server has no HEIC decoder"
 //	@Failure		500				{object}	models.ErrorResponse	"Internal server error"
 //	@Router			/uploads [post]
 func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Request) {
@@ -143,12 +139,6 @@ func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Reques
 		h.respond(w, http.StatusBadRequest, "Empty image", nil)
 		return
 	}
-	mime := http.DetectContentType(data)
-	ext, ok := allowedImageTypes[mime]
-	if !ok {
-		h.respond(w, http.StatusUnsupportedMediaType, "Unsupported image type (use JPEG or PNG)", nil)
-		return
-	}
 	uploader, err := optionalID(r, "uploaded_by_id")
 	if err != nil {
 		h.respond(w, http.StatusBadRequest, err.Error(), nil)
@@ -159,11 +149,27 @@ func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Reques
 		h.respond(w, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
-	if err := validateImage(data); err != nil {
-		h.respond(w, http.StatusBadRequest, err.Error(), nil)
-		return
+	res, code, msg := h.Ingest(ctx, data, uploader, member)
+	h.respond(w, code, msg, res)
+}
+
+// HEICGuidance is the 415 message when this server has no HEIC decoder (libheif missing).
+const HEICGuidance = "HEIC/HEIF photos can't be converted on this server (libheif/heif-dec is not installed). " +
+	"Upload a JPEG instead (iPhone: Settings > Camera > Formats > Most Compatible), or install libheif-tools."
+
+var originalMime = map[imaging.Kind]string{imaging.JPEG: "image/jpeg", imaging.PNG: "image/png", imaging.HEIC: "image/heic"}
+
+// Ingest validates and stores one photo and creates its receipt (shared by the JSON API and
+// the web UI). It returns the result (nil on error), an HTTP status and a message.
+func (h *UploadHandler) Ingest(ctx context.Context, data []byte, uploader, member *int64) (*models.UploadResult, int, string) {
+	kind := imaging.Detect(data)
+	if kind == "" {
+		return nil, http.StatusUnsupportedMediaType, "Unsupported image type (use JPEG, PNG or HEIC)"
 	}
-	// validate references before writing anything to disk
+	if kind == imaging.HEIC && h.HEIC == nil {
+		return nil, http.StatusUnsupportedMediaType, HEICGuidance
+	}
+	// validate references before doing any work or writing anything
 	for _, ref := range []struct {
 		field string
 		id    *int64
@@ -174,53 +180,80 @@ func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Reques
 		ok, err := h.Store.MemberExists(ctx, *ref.id)
 		if err != nil {
 			h.Logger.Error("member lookup failed", "error", err)
-			h.respond(w, http.StatusInternalServerError, "Failed to store upload", nil)
-			return
+			return nil, http.StatusInternalServerError, "Failed to store upload"
 		}
 		if !ok {
-			h.respond(w, http.StatusBadRequest, "Unknown "+ref.field, nil)
-			return
+			return nil, http.StatusBadRequest, "Unknown " + ref.field
 		}
 	}
 
 	sum := sha256.Sum256(data)
 	if rid, did, status, found, err := h.Store.FindReceiptBySHA(ctx, sum[:]); err != nil {
 		h.Logger.Error("upload lookup failed", "error", err)
-		h.respond(w, http.StatusInternalServerError, "Failed to store upload", nil)
-		return
+		return nil, http.StatusInternalServerError, "Failed to store upload"
 	} else if found {
-		h.respond(w, http.StatusOK, "Duplicate image; existing receipt returned",
-			models.UploadResult{ReceiptID: rid, SourceDocumentID: did, Status: status, Duplicate: true})
-		return
+		return &models.UploadResult{ReceiptID: rid, SourceDocumentID: did, Status: status, Duplicate: true}, http.StatusOK, "Duplicate image; existing receipt returned"
 	}
 
+	// Normalize to one metadata-free JPEG (orientation applied, long edge <= 2000, q80). The
+	// dedupe hash above is of the ORIGINAL bytes, so re-uploading the same photo is detected.
+	norm, err := imaging.Normalize(ctx, data, h.HEIC)
+	switch {
+	case errors.Is(err, imaging.ErrNoHEICDecoder):
+		return nil, http.StatusUnsupportedMediaType, HEICGuidance
+	case errors.Is(err, imaging.ErrTooLarge):
+		return nil, http.StatusBadRequest, "Image dimensions out of range"
+	case errors.Is(err, imaging.ErrUnsupported):
+		return nil, http.StatusUnsupportedMediaType, "Unsupported image type (use JPEG, PNG or HEIC)"
+	case err != nil:
+		h.Logger.Warn("image normalize failed", "kind", kind, "error", err)
+		return nil, http.StatusBadRequest, "Corrupt or truncated image"
+	}
+	jsum := sha256.Sum256(norm.JPEG)
 	hexSum := hex.EncodeToString(sum[:])
-	key := "receipts/" + hexSum[:2] + "/" + hexSum + ext
-	created, err := h.Blobs.Put(ctx, key, data)
+	key := "receipts/" + hexSum[:2] + "/" + hexSum + ".jpg"
+	var written []string // blobs this request created (cleanup on a later error)
+	cleanup := func() {
+		for _, k := range written {
+			if e := h.Blobs.Delete(ctx, k); e != nil {
+				h.Logger.Warn("orphan blob cleanup failed", "key", k, "error", e)
+			}
+		}
+	}
+	created, err := h.Blobs.Put(ctx, key, norm.JPEG)
 	if err != nil {
 		h.Logger.Error("blob put failed", "error", err)
-		h.respond(w, http.StatusInternalServerError, "Failed to store upload", nil)
-		return
+		return nil, http.StatusInternalServerError, "Failed to store upload"
 	}
-	doc := &models.SourceDocument{Kind: "photo", ObjectKey: key, SHA256: sum[:], MimeType: mime, UploadedByID: uploader}
+	if created {
+		written = append(written, key)
+	}
+	doc := &models.SourceDocument{Kind: "photo", ObjectKey: key, SHA256: sum[:], MimeType: "image/jpeg",
+		JPEGSHA256: jsum[:], Width: norm.Width, Height: norm.Height, UploadedByID: uploader}
+	if h.KeepOriginal {
+		okey := "receipts/" + hexSum[:2] + "/" + hexSum + ".orig." + string(kind)
+		c, err := h.Blobs.Put(ctx, okey, data)
+		if err != nil {
+			cleanup()
+			h.Logger.Error("original blob put failed", "error", err)
+			return nil, http.StatusInternalServerError, "Failed to store upload"
+		}
+		if c {
+			written = append(written, okey)
+		}
+		doc.OriginalObjectKey, doc.OriginalMimeType = okey, originalMime[kind]
+	}
 	rc := &models.Receipt{Source: models.SourcePhoto, Status: models.StatusUploaded, UploadedByID: uploader, MemberID: member}
 	if err := h.Store.CreateUpload(ctx, doc, rc); err != nil {
 		// a concurrent identical upload may have won the unique sha256 race
 		if rid, did, status, found, e := h.Store.FindReceiptBySHA(ctx, sum[:]); e == nil && found {
-			h.respond(w, http.StatusOK, "Duplicate image; existing receipt returned",
-				models.UploadResult{ReceiptID: rid, SourceDocumentID: did, Status: status, Duplicate: true})
-			return
+			return &models.UploadResult{ReceiptID: rid, SourceDocumentID: did, Status: status, Duplicate: true}, http.StatusOK, "Duplicate image; existing receipt returned"
 		}
-		// Remove the file only if this request created it; an existing blob (same sha256)
+		// Remove files only if this request created them; an existing blob (same sha256)
 		// may belong to another, successful upload.
-		if created {
-			if e := h.Blobs.Delete(ctx, key); e != nil {
-				h.Logger.Warn("orphan blob cleanup failed", "key", key, "error", e)
-			}
-		}
+		cleanup()
 		h.Logger.Error("create upload failed", "error", err)
-		h.respond(w, http.StatusInternalServerError, "Failed to store upload", nil)
-		return
+		return nil, http.StatusInternalServerError, "Failed to store upload"
 	}
 	msg := "Upload accepted; extraction disabled (stays uploaded until a provider is configured)"
 	if h.Queue != nil {
@@ -228,8 +261,7 @@ func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Reques
 		msg = "Upload accepted; extraction queued"
 	}
 	h.Logger.Info("receipt photo uploaded", "receipt_id", rc.ID, "source_document_id", doc.ID, "bytes", len(data))
-	h.respond(w, http.StatusAccepted, msg,
-		models.UploadResult{ReceiptID: rc.ID, SourceDocumentID: doc.ID, Status: rc.Status})
+	return &models.UploadResult{ReceiptID: rc.ID, SourceDocumentID: doc.ID, Status: rc.Status}, http.StatusAccepted, msg
 }
 
 // ReextractReceipt handles POST /api/v1/receipts/{id}/extract
@@ -279,7 +311,13 @@ func (h *UploadHandler) ReextractReceipt(w http.ResponseWriter, r *http.Request)
 		h.respond(w, http.StatusServiceUnavailable, "Extraction disabled", nil)
 		return
 	}
+	// Move to "uploaded" first: from here on edits are refused (409) until the new parse lands.
+	if err := h.Receipts.RequestReextract(r.Context(), id); err != nil {
+		code, msg := ReextractError(err)
+		h.respond(w, code, msg, nil)
+		return
+	}
 	h.Queue.Enqueue(id)
 	h.respond(w, http.StatusAccepted, "Extraction queued",
-		models.UploadResult{ReceiptID: id, SourceDocumentID: *rc.SourceDocumentID, Status: rc.Status})
+		models.UploadResult{ReceiptID: id, SourceDocumentID: *rc.SourceDocumentID, Status: models.StatusUploaded})
 }

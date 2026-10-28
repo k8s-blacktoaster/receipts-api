@@ -31,10 +31,12 @@ import (
 	"receipts-db/internal/database"
 	"receipts-db/internal/extraction"
 	"receipts-db/internal/handlers"
+	"receipts-db/internal/imaging"
 	"receipts-db/internal/redact"
 	"receipts-db/internal/repository"
 	"receipts-db/internal/router"
 	"receipts-db/internal/storage"
+	"receipts-db/internal/web"
 )
 
 func main() {
@@ -98,13 +100,22 @@ func main() {
 		os.Exit(1)
 	}
 	provider, err := extraction.NewProvider(extraction.Config{
-		Provider: cfg.ExtractionProvider, Model: cfg.ExtractionModel, XAIAPIKey: cfg.XAIAPIKey,
+		Provider: cfg.ExtractionProvider, Model: cfg.ExtractionModel, ReasoningEffort: cfg.ExtractionReasoningEffort,
+		XAIAPIKey:  cfg.XAIAPIKey,
 		XAIBaseURL: cfg.XAIBaseURL, Timeout: time.Duration(cfg.ExtractionTimeoutSec) * time.Second,
 	})
 	if err != nil {
 		// uploads still work; receipts stay "uploaded" until a provider is configured
 		logger.Warn("extraction disabled", "reason", redact.String(err.Error()))
 		provider = nil
+	}
+	if xp, ok := provider.(*extraction.XAIProvider); ok {
+		if os.Getenv("EXTRACTION_REASONING_EFFORT") != "" && xp.SentReasoningEffort() == "" {
+			logger.Warn("EXTRACTION_REASONING_EFFORT not supported by model; not sent",
+				"model", xp.Model(), "effort", cfg.ExtractionReasoningEffort)
+		}
+		logger.Info("extraction provider", "model", xp.Model(), "reasoning_effort", xp.SentReasoningEffort(),
+			"timeout_s", cfg.ExtractionTimeoutSec)
 	}
 	workerCtx, stopWorkers := context.WithCancel(context.Background())
 	defer stopWorkers()
@@ -125,12 +136,28 @@ func main() {
 			receiptRepo.ResetStaleParsing, receiptRepo.ListIDsByStatus)
 	}
 	uploadHandler := &handlers.UploadHandler{Store: docRepo, Receipts: receiptRepo, Blobs: blobs,
-		MaxBytes: cfg.MaxUploadBytes, Logger: logger}
+		MaxBytes: cfg.MaxUploadBytes, Logger: logger, KeepOriginal: cfg.KeepOriginalUploads}
+	if dec := imaging.FindHEICDecoder(cfg.HEICDecoder); dec != nil {
+		uploadHandler.HEIC = dec // avoid a typed-nil interface
+		logger.Info("HEIC uploads enabled", "decoder", dec.Name())
+	} else {
+		logger.Warn("no HEIC decoder found (install libheif-tools); HEIC uploads will get 415")
+	}
 	if queue != nil {
 		uploadHandler.Queue = queue
 	}
 
-	handler := router.New(receiptHandler, uploadHandler, logger)
+	ui, err := web.New(web.UI{Receipts: receiptRepo, Members: repository.NewMemberRepository(db),
+		Merchants: repository.NewMerchantRepository(db), Docs: docRepo, Blobs: blobs, Uploads: uploadHandler,
+		MaxBytes: cfg.MaxUploadBytes, Logger: logger})
+	if err != nil {
+		logger.Error("web UI templates", "error", err)
+		os.Exit(1)
+	}
+	if queue != nil {
+		ui.Queue = queue
+	}
+	handler := router.New(receiptHandler, uploadHandler, ui, logger)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),

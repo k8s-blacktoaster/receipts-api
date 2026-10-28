@@ -117,7 +117,10 @@ func TestReceiptRoundTripExactCents(t *testing.T) {
 		t.Fatalf("manual status = %q", in2.Status)
 	}
 
-	// review: edit a line item, then the pipeline status
+	// review: edit a line item (photo receipt must be past extraction: edits are refused while uploaded/parsing)
+	if _, err := db.Exec(`UPDATE receipts SET status = 'parsed' WHERE id = $1`, in.ID); err != nil {
+		t.Fatal(err)
+	}
 	it := got.Items[1]
 	it.Quantity, it.LineTotalCents = 2.0, 0
 	if err := repo.UpdateItem(ctx, &it); err != nil {
@@ -125,6 +128,9 @@ func TestReceiptRoundTripExactCents(t *testing.T) {
 	}
 	if it.NetTotalCents != 138 || it.EditedAt == nil {
 		t.Fatalf("edited item: %+v", it)
+	}
+	if _, err := db.Exec(`UPDATE receipts SET status = 'uploaded' WHERE id = $1`, in.ID); err != nil {
+		t.Fatal(err)
 	}
 	if err := repo.SetStatus(ctx, in.ID, models.StatusFailed, "could not read total", nil); err != nil {
 		t.Fatal(err)

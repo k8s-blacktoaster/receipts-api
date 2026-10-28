@@ -1,0 +1,7 @@
+{{define "content"}}
+<p>Who is using this phone? This is remembered on this device. (There is no login: the app is only reachable on the home VPN.)</p>
+<form method="post" action="/member" class="members">
+  <input type="hidden" name="next" value="{{.Next}}">
+  {{range .Members}}<button class="btn big" name="member_id" value="{{.ID}}">{{.DisplayName}}</button>{{else}}<p class="empty">No members yet. Add them via the API.</p>{{end}}
+</form>
+{{end}}

@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"image"
@@ -68,6 +69,20 @@ type fakeQueue struct{ ids []int }
 func (q *fakeQueue) Enqueue(id int) bool { q.ids = append(q.ids, id); return true }
 
 type fakeLookup struct{ r *models.Receipt }
+
+func (f fakeLookup) RequestReextract(_ context.Context, id int) error {
+	if f.r == nil || f.r.ID != id {
+		return repository.ErrNotFound
+	}
+	switch f.r.Status {
+	case models.StatusParsing:
+		return repository.ErrReceiptBusy
+	case models.StatusReviewed:
+		return repository.ErrInvalidTransition
+	}
+	f.r.Status = models.StatusUploaded
+	return nil
+}
 
 func (f fakeLookup) GetByID(_ context.Context, id int) (*models.Receipt, error) {
 	if f.r == nil || f.r.ID != id {
@@ -145,11 +160,11 @@ func TestUploadAcceptedAndDuplicate(t *testing.T) {
 		t.Fatalf("queue: %v", q.ids)
 	}
 	d := st.docs[0]
-	if d.MimeType != "image/png" || *d.UploadedByID != 3 || !strings.HasPrefix(d.ObjectKey, "receipts/") || !strings.HasSuffix(d.ObjectKey, ".png") {
+	if d.MimeType != "image/jpeg" || *d.UploadedByID != 3 || !strings.HasPrefix(d.ObjectKey, "receipts/") || !strings.HasSuffix(d.ObjectKey, ".jpg") {
 		t.Fatalf("doc: %+v", d)
 	}
-	if got, _ := blobs.Get(context.Background(), d.ObjectKey); !bytes.Equal(got, img) {
-		t.Fatal("blob not stored")
+	if got, _ := blobs.Get(context.Background(), d.ObjectKey); len(got) < 2 || got[0] != 0xFF || got[1] != 0xD8 || len(blobs.M) != 1 {
+		t.Fatal("normalized JPEG not stored (or original kept by default)")
 	}
 	body, ct = multipartBody(t, "image", img, nil)
 	rec = do(h.UploadReceiptPhoto, body, ct)
@@ -304,5 +319,75 @@ func TestUploadCleansUpBlobOnDBError(t *testing.T) {
 	do(h.UploadReceiptPhoto, body, ct)
 	if _, ok := blobs.M[sumKey]; !ok {
 		t.Fatal("deleted a blob this request did not create")
+	}
+}
+
+type fakeHEIC struct{ calls int }
+
+func (f *fakeHEIC) Name() string { return "fake" }
+func (f *fakeHEIC) Decode(context.Context, []byte) (image.Image, error) {
+	f.calls++
+	return image.NewRGBA(image.Rect(0, 0, 2400, 3200)), nil
+}
+
+// minimal ftyp + an ispe property (2400x3200) so the pre-decode size check passes
+var heicBytes = append(append(append([]byte{0, 0, 0, 0x18}, []byte("ftypheic\x00\x00\x00\x00mif1heic")...),
+	0, 0, 0, 20, 'i', 's', 'p', 'e', 0, 0, 0, 0, 0, 0, 0x09, 0x60, 0, 0, 0x0c, 0x80), make([]byte, 64)...)
+
+func TestUploadHEIC(t *testing.T) {
+	// no decoder on this server: 415 with guidance, nothing stored
+	h, st, _, blobs := newUploadHandler()
+	body, ct := multipartBody(t, "image", heicBytes, nil)
+	rec := do(h.UploadReceiptPhoto, body, ct)
+	if rec.Code != 415 || !strings.Contains(rec.Body.String(), "libheif") || len(blobs.M) != 0 || len(st.docs) != 0 {
+		t.Fatalf("no decoder: %d %s", rec.Code, rec.Body)
+	}
+	// with a decoder: converted to one bounded JPEG
+	dec := &fakeHEIC{}
+	h.HEIC = dec
+	body, ct = multipartBody(t, "image", heicBytes, nil)
+	rec = do(h.UploadReceiptPhoto, body, ct)
+	if rec.Code != 202 || dec.calls != 1 || len(blobs.M) != 1 {
+		t.Fatalf("decoder: %d %s", rec.Code, rec.Body)
+	}
+	d := st.docs[0]
+	img, err := jpegenc.Decode(bytes.NewReader(blobs.M[d.ObjectKey]))
+	if err != nil || d.MimeType != "image/jpeg" || img.Bounds().Dy() != 2000 || img.Bounds().Dx() != 1500 || d.Width != 1500 {
+		t.Fatalf("stored %s %v %v", d.MimeType, err, img.Bounds())
+	}
+}
+
+// Only the normalized JPEG is stored by default; KEEP_ORIGINAL_UPLOADS also keeps the original.
+// Dedupe uses the hash of the ORIGINAL bytes either way.
+func TestUploadStoresNormalizedJPEG(t *testing.T) {
+	for _, keep := range []bool{false, true} {
+		h, st, _, blobs := newUploadHandler()
+		h.KeepOriginal = keep
+		orig := pngBytes(t, 7)
+		body, ct := multipartBody(t, "image", orig, nil)
+		if rec := do(h.UploadReceiptPhoto, body, ct); rec.Code != 202 {
+			t.Fatalf("keep=%v: %d %s", keep, rec.Code, rec.Body)
+		}
+		d := st.docs[0]
+		sum := sha256.Sum256(orig)
+		if !bytes.Equal(d.SHA256, sum[:]) || len(d.JPEGSHA256) != 32 || !strings.HasSuffix(d.ObjectKey, ".jpg") || d.MimeType != "image/jpeg" {
+			t.Fatalf("keep=%v doc: %+v", keep, d)
+		}
+		if b := blobs.M[d.ObjectKey]; len(b) < 3 || b[0] != 0xFF || b[1] != 0xD8 {
+			t.Fatalf("keep=%v: stored blob is not a JPEG", keep)
+		}
+		_, origStored := blobs.M[d.OriginalObjectKey]
+		if keep != (d.OriginalObjectKey != "" && origStored && bytes.Equal(blobs.M[d.OriginalObjectKey], orig) && d.OriginalMimeType == "image/png") {
+			t.Fatalf("keep=%v: original key=%q stored=%v", keep, d.OriginalObjectKey, origStored)
+		}
+		if want := map[bool]int{false: 1, true: 2}[keep]; len(blobs.M) != want {
+			t.Fatalf("keep=%v: %d blobs, want %d", keep, len(blobs.M), want)
+		}
+		// same original again: duplicate, nothing new written
+		body, ct = multipartBody(t, "image", orig, nil)
+		rec := do(h.UploadReceiptPhoto, body, ct)
+		if rec.Code != 200 || !decodeResult(t, rec).Duplicate || len(st.docs) != 1 {
+			t.Fatalf("keep=%v duplicate: %d", keep, rec.Code)
+		}
 	}
 }

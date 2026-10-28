@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Money is stored and transported as integer cents (int64). Never use floats for money.
@@ -53,6 +55,10 @@ type Receipt struct {
 	StoreNumber   string `json:"store_number,omitempty"`
 	StoreAddress  string `json:"store_address,omitempty"`
 	StorePhone    string `json:"store_phone,omitempty"`
+	// StoreCity/State/Zip live on the stores row (city, region, postal_code).
+	StoreCity  string `json:"store_city,omitempty"`
+	StoreState string `json:"store_state,omitempty"`
+	StoreZip   string `json:"store_zip,omitempty"`
 
 	Date        string     `json:"date"` // YYYY-MM-DD (local purchase date)
 	PurchasedAt *time.Time `json:"purchased_at,omitempty"`
@@ -179,8 +185,38 @@ func (r *Receipt) ItemsNetCents() int64 {
 	return sum
 }
 
+// Input bounds (400 beyond these). Money is cents; $10M per field is far above any household receipt.
+const (
+	MaxMoneyCents  = 1_000_000_000
+	MaxQuantity    = 100_000
+	MaxNameLen     = 200  // store name, item name
+	MaxTextLen     = 1000 // raw_text, description, address
+	MaxShortLen    = 100  // store number, phone, city, state, zip, sku, codes, payment
+	MaxItems       = 1000
+	MaxAdjustments = 200
+)
+
+func moneyOK(v int64, allowNeg bool) bool {
+	if v < 0 && !allowNeg {
+		return false
+	}
+	return v <= MaxMoneyCents && v >= -MaxMoneyCents
+}
+
+func tooLong(fields map[string]string, max int) error {
+	for label, v := range fields {
+		if utf8.RuneCountInString(v) > max {
+			return fmt.Errorf("%s is too long (max %d characters)", label, max)
+		}
+	}
+	return nil
+}
+
 // Validate checks structural rules (not arithmetic reconciliation; that is phase 2 review logic).
 func (r *Receipt) Validate() error {
+	if err := r.validateBounds(); err != nil {
+		return err
+	}
 	if r.StoreName == "" {
 		return errors.New("Store name is required")
 	}
@@ -209,7 +245,7 @@ func (r *Receipt) Validate() error {
 		return errors.New("Invalid status")
 	}
 	for i, it := range r.Items {
-		if it.Name == "" {
+		if strings.TrimSpace(it.Name) == "" {
 			return fmt.Errorf("Item name is required for item %d", i+1)
 		}
 		if it.Quantity <= 0 {
@@ -270,19 +306,24 @@ type PurchaseLocation struct {
 
 // SourceDocument is an uploaded photo (or other input) and its raw extraction.
 type SourceDocument struct {
-	ID            int64           `json:"id"`
-	Kind          string          `json:"kind"`
-	ObjectKey     string          `json:"object_key,omitempty"`
-	SHA256        []byte          `json:"-"`
-	MimeType      string          `json:"mime_type,omitempty"`
-	UploadedByID  *int64          `json:"uploaded_by_id,omitempty"`
-	RawExtraction json.RawMessage `json:"raw_extraction,omitempty"`
-	Model         string          `json:"model,omitempty"`
-	PromptVersion string          `json:"prompt_version,omitempty"`
-	ParseState    string          `json:"parse_state"`
-	Error         string          `json:"error,omitempty"`
-	ParsedAt      *time.Time      `json:"parsed_at,omitempty"`
-	CreatedAt     time.Time       `json:"created_at"`
+	ID         int64  `json:"id"`
+	Kind       string `json:"kind"`
+	ObjectKey  string `json:"object_key,omitempty"`
+	SHA256     []byte `json:"-"` // of the original upload (dedupe)
+	MimeType   string `json:"mime_type,omitempty"`
+	JPEGSHA256 []byte `json:"-"` // of the stored normalized JPEG
+	// OriginalObjectKey/MimeType are set only with KEEP_ORIGINAL_UPLOADS=true.
+	OriginalObjectKey string          `json:"original_object_key,omitempty"`
+	OriginalMimeType  string          `json:"original_mime_type,omitempty"`
+	Width, Height     int             `json:"-"`
+	UploadedByID      *int64          `json:"uploaded_by_id,omitempty"`
+	RawExtraction     json.RawMessage `json:"raw_extraction,omitempty"`
+	Model             string          `json:"model,omitempty"`
+	PromptVersion     string          `json:"prompt_version,omitempty"`
+	ParseState        string          `json:"parse_state"`
+	Error             string          `json:"error,omitempty"`
+	ParsedAt          *time.Time      `json:"parsed_at,omitempty"`
+	CreatedAt         time.Time       `json:"created_at"`
 }
 
 // UploadResult is returned by POST /uploads.
@@ -291,4 +332,84 @@ type UploadResult struct {
 	SourceDocumentID int64  `json:"source_document_id"`
 	Status           string `json:"status"`
 	Duplicate        bool   `json:"duplicate"`
+}
+
+// Merchant is a normalized merchant (Name is the NormalizeMerchantName key).
+type Merchant struct {
+	ID           int64  `json:"id"`
+	Name         string `json:"name"`
+	Category     string `json:"category,omitempty"`
+	ReceiptCount int    `json:"receipt_count"`
+}
+
+// validateBounds rejects out-of-range money/quantities (NaN, Inf, huge values), negative totals
+// and over-long text, before anything reaches the DB.
+func (r *Receipt) validateBounds() error {
+	if err := tooLong(map[string]string{"Store name": r.StoreName, "Category": r.StoreCategory}, MaxNameLen); err != nil {
+		return err
+	}
+	if err := tooLong(map[string]string{"Address": r.StoreAddress}, MaxTextLen); err != nil {
+		return err
+	}
+	if err := tooLong(map[string]string{"Store number": r.StoreNumber, "Phone": r.StorePhone, "City": r.StoreCity,
+		"State": r.StoreState, "Zip": r.StoreZip, "Payment method": r.PaymentMethod, "Payment last4": r.PaymentLast4,
+		"Currency": r.Currency, "Date": r.Date}, MaxShortLen); err != nil {
+		return err
+	}
+	if r.ExternalID != nil && utf8.RuneCountInString(*r.ExternalID) > MaxShortLen {
+		return fmt.Errorf("External id is too long (max %d characters)", MaxShortLen)
+	}
+	for label, v := range map[string]int64{"Subtotal": r.SubtotalCents, "Tax": r.TaxCents, "Total": r.TotalCents, "Savings": r.SavingsCents} {
+		if !moneyOK(v, false) {
+			return fmt.Errorf("%s must be between 0 and %d cents", label, int64(MaxMoneyCents))
+		}
+	}
+	if len(r.Items) > MaxItems {
+		return fmt.Errorf("Too many items (max %d)", MaxItems)
+	}
+	if len(r.Adjustments) > MaxAdjustments {
+		return fmt.Errorf("Too many adjustments (max %d)", MaxAdjustments)
+	}
+	for i, it := range r.Items {
+		n := i + 1
+		if math.IsNaN(it.Quantity) || math.IsInf(it.Quantity, 0) || it.Quantity > MaxQuantity {
+			return fmt.Errorf("Item quantity out of range for item %d (max %d)", n, MaxQuantity)
+		}
+		if !moneyOK(it.UnitPriceCents, it.IsReturn) || !moneyOK(it.LineTotalCents, it.IsReturn) || !moneyOK(it.DiscountCents, true) {
+			return fmt.Errorf("Item amount out of range for item %d", n)
+		}
+		if err := tooLong(map[string]string{fmt.Sprintf("Item %d name", n): it.Name}, MaxNameLen); err != nil {
+			return err
+		}
+		if err := tooLong(map[string]string{fmt.Sprintf("Item %d raw text", n): it.RawText,
+			fmt.Sprintf("Item %d description", n): it.Description}, MaxTextLen); err != nil {
+			return err
+		}
+		if err := tooLong(map[string]string{fmt.Sprintf("Item %d sku", n): it.SKU, fmt.Sprintf("Item %d item number", n): it.ItemNumber,
+			fmt.Sprintf("Item %d upc", n): it.UPC, fmt.Sprintf("Item %d unit", n): it.Unit,
+			fmt.Sprintf("Item %d tax flag", n): it.TaxFlag}, MaxShortLen); err != nil {
+			return err
+		}
+	}
+	for i, a := range r.Adjustments {
+		if !moneyOK(a.AmountCents, true) {
+			return fmt.Errorf("Adjustment amount out of range for adjustment %d", i+1)
+		}
+		if err := tooLong(map[string]string{fmt.Sprintf("Adjustment %d text", i+1): a.RawText}, MaxTextLen); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ReadyForReview reports what a receipt still needs before it can be marked reviewed/parsed
+// (the receipts_complete_when_parsed CHECK: a merchant and a date).
+func (r *Receipt) ReadyForReview() error {
+	if r.MerchantID == 0 && NormalizeMerchantName(r.StoreName) == "" {
+		return errors.New("add the store name before approving")
+	}
+	if r.Date == "" {
+		return errors.New("add the purchase date before approving")
+	}
+	return nil
 }

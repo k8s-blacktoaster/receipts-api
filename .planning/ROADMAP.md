@@ -2,7 +2,7 @@
 
 - [x] **Phase 1: Schema & model hardening** - merchants/stores, line items, products/aliases, members, pipeline status, cents money (merged 2026-10-27, PR #1)
 - [x] **Phase 2: Upload + extraction pipeline** - photo upload, object store, queue, pluggable vision LLM (Grok default), validation
-- [ ] **Phase 3: Mobile web UI** - camera capture, multi-photo, upload status, receipt list, review/edit
+- [x] **Phase 3: Mobile web UI** - camera capture, multi-photo, upload status, receipt list, review/edit
 - [ ] **Phase 4: Normalization & review** - product matching, alias learning, review endpoints
 - [ ] **Phase 5: MCP server** - read-only tools over Streamable HTTP + auth
 - [ ] **Phase 6: Kubernetes deploy & backups** - CNPG, object store, secrets, ingress, restore drill
@@ -37,10 +37,13 @@
 
 ### Phase 3: Mobile web UI
 **Depends on**: Phase 2
-**Requirements**: UI-01..UI-03
-**Scope**: camera capture on the phone, multiple photos per receipt, upload status, receipt
-list with parse/review status, simple edit/review of parsed items. No chat or bot. Static
-assets embedded in the Go binary (`embed`), served by the same deployment, VPN-only.
+**Requirements**: UI-01..UI-07, ING-09
+**Scope**: camera capture on the phone, upload status, receipt list with parse/review status,
+detail page (image beside fields/items), edit/review/approve, re-extract, member picker,
+merchant rename. Server-rendered html/template + small vanilla JS, embedded with go:embed,
+VPN-only, no chat. Multi-photo receipts deferred (one photo per upload).
+**Plans**: 03-01 (phases/03-web-ui)
+**Status**: Executed on phase-03-web-ui, PR open - see 03-01-SUMMARY.md
 **Success Criteria**: from a phone on VPN, capture -> upload -> see status -> fix a line -> mark reviewed
 
 ### Phase 4: Normalization & review
@@ -57,7 +60,17 @@ trigram index from migration 006.
 
 ### Phase 6: Kubernetes deploy & backups
 **Depends on**: Phase 2 (can run in parallel with 3-5)
-**Requirements**: OPS-01..OPS-03 (OPS-03: UTF-8 locale/collation, or explicit collation in merchant_name_key)
+**Requirements**: OPS-01..OPS-06 (OPS-03: UTF-8 locale/collation, or explicit collation in merchant_name_key)
+**Plan notes** (mirror /Users/michael/_code/world-cup-site, read 2026-10-27):
+  - `.github/workflows/build-api.yml`: on push to main (paths filter) + workflow_dispatch,
+    `runs-on: [self-hosted, k3s]`, sha7 tag, `docker build --target test .` gate, build, push
+    `registry.k8s.blacktoaster.com/receipts/api:<sha7>`, step summary.
+  - `helm/`: Chart.yaml, values.yaml (namespace, host, api.tag, ingress {className nginx,
+    ssl-redirect, tlsSecretName}, certificate {issuerRef vault-issuer/ClusterIssuer/cert-manager.io},
+    externalSecrets {secretStore vault-backend, vaultKey apps/receipts/app}); templates
+    api.yaml (Deployment + Service; XAI_API_KEY and DB password from the synced Secret),
+    externalsecret.yaml (properties xai-api-key, db-password), certificate.yaml, ingress.yaml,
+    postgres (CNPG or StatefulSet) and a PVC for UPLOAD_DIR until the object store lands.
 
 ### Phase 7: Legacy column cleanup (later)
 **Depends on**: Phases 2-4 (all readers on merchant_id/store_id)

@@ -53,3 +53,19 @@ func TestExtractionSweepInterval(t *testing.T) {
 		t.Fatalf("disabled = %d", c.ExtractionSweepSec)
 	}
 }
+
+func TestExtractionTimeoutAndReasoningEffort(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x/y_test")
+	cfg, err := Load()
+	if err != nil || cfg.ExtractionTimeoutSec != 300 || cfg.ExtractionReasoningEffort != "low" {
+		t.Fatalf("defaults: %v %+v", err, cfg)
+	}
+	t.Setenv("EXTRACTION_REASONING_EFFORT", " LOW ")
+	if cfg, err = Load(); err != nil || cfg.ExtractionReasoningEffort != "low" {
+		t.Fatalf("low: %v %q", err, cfg.ExtractionReasoningEffort)
+	}
+	t.Setenv("EXTRACTION_REASONING_EFFORT", "max")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid effort must fail")
+	}
+}

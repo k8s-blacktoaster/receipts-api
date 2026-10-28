@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -21,13 +22,17 @@ type Config struct {
 
 	// Uploads / extraction (phase 2). XAI_API_KEY must come from the environment (k8s Secret);
 	// it is never read from files in the repo and never logged.
-	UploadDir            string
-	MaxUploadBytes       int64
-	ExtractionProvider   string
-	ExtractionModel      string
-	XAIAPIKey            string
-	XAIBaseURL           string
-	ExtractionTimeoutSec int
+	UploadDir           string
+	MaxUploadBytes      int64
+	KeepOriginalUploads bool   // also store the original upload next to the normalized JPEG
+	HEICDecoder         string // HEIC decoder binary (empty: search heif-dec, heif-convert, sips)
+	ExtractionProvider  string
+	ExtractionModel     string
+	// ExtractionReasoningEffort is sent as reasoning_effort only to models that support it.
+	ExtractionReasoningEffort string
+	XAIAPIKey                 string
+	XAIBaseURL                string
+	ExtractionTimeoutSec      int
 	// ExtractionShutdownSec is how long SIGTERM waits for in-flight extractions.
 	ExtractionShutdownSec int
 	// ExtractionSweepSec is how often abandoned "parsing" rows are reset and requeued (0 = off).
@@ -50,17 +55,20 @@ func Load() (*Config, error) {
 
 		Environment: getEnv("ENVIRONMENT", "development"),
 
-		UploadDir:                getEnv("UPLOAD_DIR", "data/uploads"),
-		MaxUploadBytes:           int64(getEnvAsInt("MAX_UPLOAD_BYTES", 20<<20)),
-		ExtractionProvider:       getEnv("EXTRACTION_PROVIDER", "xai"),
-		ExtractionModel:          os.Getenv("EXTRACTION_MODEL"),
-		XAIAPIKey:                os.Getenv("XAI_API_KEY"),
-		XAIBaseURL:               getEnv("XAI_BASE_URL", "https://api.x.ai/v1"),
-		ExtractionTimeoutSec:     getEnvAsInt("EXTRACTION_TIMEOUT_SECONDS", 120),
-		ExtractionShutdownSec:    getEnvAsInt("EXTRACTION_SHUTDOWN_TIMEOUT", 25),
-		ExtractionSweepSec:       getEnvAsInt("EXTRACTION_STALE_SWEEP_INTERVAL", 60),
-		ExtractionWorkers:        getEnvAsInt("EXTRACTION_WORKERS", 2),
-		ExtractionToleranceCents: int64(getEnvAsInt("EXTRACTION_TOLERANCE_CENTS", 2)),
+		UploadDir:                 getEnv("UPLOAD_DIR", "data/uploads"),
+		MaxUploadBytes:            int64(getEnvAsInt("MAX_UPLOAD_BYTES", 20<<20)),
+		KeepOriginalUploads:       getEnvAsBool("KEEP_ORIGINAL_UPLOADS", false),
+		HEICDecoder:               getEnv("HEIC_DECODER", ""),
+		ExtractionProvider:        getEnv("EXTRACTION_PROVIDER", "xai"),
+		ExtractionModel:           os.Getenv("EXTRACTION_MODEL"),
+		ExtractionReasoningEffort: strings.ToLower(strings.TrimSpace(getEnv("EXTRACTION_REASONING_EFFORT", "low"))),
+		XAIAPIKey:                 os.Getenv("XAI_API_KEY"),
+		XAIBaseURL:                getEnv("XAI_BASE_URL", "https://api.x.ai/v1"),
+		ExtractionTimeoutSec:      getEnvAsInt("EXTRACTION_TIMEOUT_SECONDS", 300),
+		ExtractionShutdownSec:     getEnvAsInt("EXTRACTION_SHUTDOWN_TIMEOUT", 25),
+		ExtractionSweepSec:        getEnvAsInt("EXTRACTION_STALE_SWEEP_INTERVAL", 60),
+		ExtractionWorkers:         getEnvAsInt("EXTRACTION_WORKERS", 2),
+		ExtractionToleranceCents:  int64(getEnvAsInt("EXTRACTION_TOLERANCE_CENTS", 2)),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -90,6 +98,11 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid LOG_LEVEL: must be debug, info, warn, or error")
 	}
 
+	switch c.ExtractionReasoningEffort {
+	case "", "none", "low", "medium", "high", "xhigh":
+	default:
+		return fmt.Errorf("invalid EXTRACTION_REASONING_EFFORT: must be empty, none, low, medium, high or xhigh")
+	}
 	if c.ExtractionToleranceCents < 0 {
 		return fmt.Errorf("invalid EXTRACTION_TOLERANCE_CENTS: must be >= 0")
 	}
@@ -116,6 +129,13 @@ func getEnvAsInt(key string, defaultValue int) int {
 		if intVal, err := strconv.Atoi(value); err == nil {
 			return intVal
 		}
+	}
+	return defaultValue
+}
+
+func getEnvAsBool(key string, defaultValue bool) bool {
+	if v, err := strconv.ParseBool(os.Getenv(key)); err == nil {
+		return v
 	}
 	return defaultValue
 }

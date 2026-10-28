@@ -18,15 +18,15 @@ var ErrClaimLost = errors.New("extraction claim lost")
 //
 //	uploaded     -> parsing | failed
 //	parsing      -> parsed | needs_review | failed | uploaded (stale-claim reset)
-//	parsed       -> parsing (re-extract) | needs_review | reviewed
-//	needs_review -> parsing (re-extract) | reviewed
+//	parsed       -> parsing (re-extract) | needs_review | reviewed | uploaded (re-extract requested)
+//	needs_review -> parsing (re-extract) | reviewed | uploaded (re-extract requested)
 //	failed       -> parsing (re-extract) | uploaded | reviewed (fixed by hand)
 //	reviewed     -> needs_review (reopen). Never re-extracted in v1.
 var statusTransitions = map[string][]string{
 	StatusUploaded:    {StatusParsing, StatusFailed},
 	StatusParsing:     {StatusParsed, StatusNeedsReview, StatusFailed, StatusUploaded},
-	StatusParsed:      {StatusParsing, StatusNeedsReview, StatusReviewed},
-	StatusNeedsReview: {StatusParsing, StatusReviewed},
+	StatusParsed:      {StatusParsing, StatusNeedsReview, StatusReviewed, StatusUploaded},
+	StatusNeedsReview: {StatusParsing, StatusReviewed, StatusUploaded},
 	StatusFailed:      {StatusParsing, StatusUploaded, StatusReviewed},
 	StatusReviewed:    {StatusNeedsReview},
 }
@@ -77,6 +77,10 @@ func StatusesAllowedInto(to string) []string {
 	}
 	return out
 }
+
+// EditLocked reports whether user edits must be refused: the receipt is queued for or
+// undergoing extraction, whose result would overwrite the edit.
+func EditLocked(status string) bool { return status == StatusUploaded || status == StatusParsing }
 
 // ReextractableStatuses are the statuses a photo receipt can be (re-)claimed for parsing from.
 func ReextractableStatuses() []string { return StatusesAllowedInto(StatusParsing) }

@@ -134,3 +134,31 @@ func TestUploadDedupeAndPendingCheck(t *testing.T) {
 		t.Fatalf("pending ids: %v", ids)
 	}
 }
+
+// Re-uploading a photo whose receipt was deleted reuses the orphaned source document
+// (unique sha256) instead of failing with a 500.
+func TestReuploadAfterDeleteReusesDocument(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	docs, blobs := NewSourceDocumentRepository(db), storage.NewMemory()
+	rc := uploadFixture(t, docs, blobs, []byte{43})
+	oldDoc := *rc.SourceDocumentID
+	if err := NewReceiptRepository(db).Delete(ctx, rc.ID); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte{43})
+	if _, _, _, found, _ := docs.FindReceiptBySHA(ctx, sum[:]); found {
+		t.Fatal("deleted receipt still found")
+	}
+	doc := &models.SourceDocument{SHA256: sum[:], MimeType: "image/jpeg", ObjectKey: "k2"}
+	again := &models.Receipt{Source: models.SourcePhoto, Status: models.StatusUploaded}
+	if err := docs.CreateUpload(ctx, doc, again); err != nil {
+		t.Fatalf("re-upload after delete: %v", err)
+	}
+	if doc.ID != oldDoc || again.ID == rc.ID {
+		t.Fatalf("doc %d (old %d), receipt %d (old %d)", doc.ID, oldDoc, again.ID, rc.ID)
+	}
+	if d, _ := docs.GetByID(ctx, doc.ID); d.ObjectKey != "k2" || d.ParseState != "pending" {
+		t.Fatalf("doc not refreshed: %+v", d)
+	}
+}

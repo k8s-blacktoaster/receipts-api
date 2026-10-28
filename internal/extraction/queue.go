@@ -27,7 +27,7 @@ type Queue struct {
 	wg      sync.WaitGroup
 
 	mu      sync.Mutex
-	pending map[int]bool // queued or running
+	pending map[int]jobState // queued or running
 	closed  bool
 	stop    chan struct{}      // closed by Shutdown: workers take no new jobs
 	jobCtx  context.Context    // parent of every job context
@@ -46,7 +46,7 @@ func NewQueue(p Processor, size int, timeout time.Duration, log *slog.Logger) *Q
 	}
 	jctx, abort := context.WithCancel(context.Background())
 	return &Queue{ch: make(chan int, size), p: p, timeout: timeout, log: log,
-		pending: map[int]bool{}, stop: make(chan struct{}), jobCtx: jctx, abort: abort}
+		pending: map[int]jobState{}, stop: make(chan struct{}), jobCtx: jctx, abort: abort}
 }
 
 // Enqueue never blocks. It returns false if the queue is shut down or full (the receipt stays
@@ -59,12 +59,18 @@ func (q *Queue) Enqueue(receiptID int) bool {
 		q.log.Warn("extraction queue shut down; receipt left pending", "receipt_id", receiptID)
 		return false
 	}
-	if q.pending[receiptID] {
+	switch q.pending[receiptID] {
+	case jobQueued, jobRunningRerun:
+		return true // already scheduled
+	case jobRunning:
+		// If the running job ends up skipping (it lost its claim, e.g. after a sweep reset and
+		// this new request), run once more right after it instead of dropping the request.
+		q.pending[receiptID] = jobRunningRerun
 		return true
 	}
 	select {
 	case q.ch <- receiptID:
-		q.pending[receiptID] = true
+		q.pending[receiptID] = jobQueued
 		return true
 	default:
 		q.log.Warn("extraction queue full; receipt left pending", "receipt_id", receiptID)
@@ -111,15 +117,40 @@ func (q *Queue) Start(ctx context.Context, n int) {
 	}
 }
 
+type jobState int
+
+const (
+	jobNone jobState = iota
+	jobQueued
+	jobRunning
+	jobRunningRerun
+)
+
 func (q *Queue) run(id int) {
+	q.mu.Lock()
+	q.pending[id] = jobRunning
+	q.mu.Unlock()
+	var out *Outcome
 	defer func() {
 		q.mu.Lock()
+		defer q.mu.Unlock()
+		// Only a job that did no work (skipped: claim lost / not claimable) leaves a request
+		// unserved; a completed job already satisfied requests made while it was running.
+		rerun := q.pending[id] == jobRunningRerun && !q.closed && out != nil && out.Status == StatusSkipped
 		delete(q.pending, id)
-		q.mu.Unlock()
+		if rerun {
+			select {
+			case q.ch <- id:
+				q.pending[id] = jobQueued
+			default:
+				q.log.Warn("extraction queue full; rerun left to the sweep", "receipt_id", id)
+			}
+		}
 	}()
 	jctx, cancel := context.WithTimeout(q.jobCtx, q.timeout)
 	defer cancel()
-	if _, err := q.p.Process(jctx, id); err != nil {
+	var err error
+	if out, err = q.p.Process(jctx, id); err != nil {
 		q.log.Error("extraction pipeline error", "receipt_id", id, "error", redact.String(err.Error()))
 	}
 }
@@ -169,7 +200,8 @@ func (q *Queue) RequeuePending(ctx context.Context, list func(ctx context.Contex
 const StaleGrace = 30 * time.Second
 
 // StaleAfter is how old a claim must be before the sweep may reset it: longer than any live
-// job can run (job timeout + grace), so a sweep never steals a claim that is still working.
+// job can run (job timeout + grace; with main.go wiring that is EXTRACTION_TIMEOUT_SECONDS + 60s),
+// so a sweep never steals a claim that is still working.
 func (q *Queue) StaleAfter() time.Duration { return q.timeout + StaleGrace }
 
 // Recover resets abandoned "parsing" rows (older than StaleAfter) to "uploaded" and requeues
