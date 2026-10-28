@@ -163,3 +163,51 @@ func loadMigrations(path string) ([]Migration, error) {
 
 	return migrations, nil
 }
+
+// RollbackMigrations reverts the most recently applied migrations, newest first.
+// steps <= 0 reverts all applied migrations.
+func RollbackMigrations(db *DB, migrationsPath string, steps int) error {
+	if err := createMigrationsTable(db); err != nil {
+		return fmt.Errorf("failed to create migrations table: %w", err)
+	}
+	migrations, err := loadMigrations(migrationsPath)
+	if err != nil {
+		return fmt.Errorf("failed to load migrations: %w", err)
+	}
+	applied, err := getAppliedMigrations(db)
+	if err != nil {
+		return fmt.Errorf("failed to get applied migrations: %w", err)
+	}
+
+	done := 0
+	for i := len(migrations) - 1; i >= 0; i-- {
+		if steps > 0 && done >= steps {
+			break
+		}
+		m := migrations[i]
+		if !applied[m.Version] {
+			continue
+		}
+		if strings.TrimSpace(m.Down) == "" {
+			return fmt.Errorf("migration %s has no down script", m.Version)
+		}
+		slog.Info("reverting migration", "version", m.Version, "name", m.Name)
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction: %w", err)
+		}
+		if _, err := tx.Exec(m.Down); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to revert migration %s: %w", m.Version, err)
+		}
+		if _, err := tx.Exec("DELETE FROM schema_migrations WHERE version = $1", m.Version); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to unrecord migration %s: %w", m.Version, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit revert %s: %w", m.Version, err)
+		}
+		done++
+	}
+	return nil
+}
