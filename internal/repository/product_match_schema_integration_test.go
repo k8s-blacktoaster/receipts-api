@@ -41,12 +41,12 @@ func TestMatchColumnsMigration(t *testing.T) {
 	repo := NewReceiptRepository(db)
 	conf := 0.62
 	in := &models.Receipt{StoreName: "acme", Date: "2026-02-03", Source: models.SourceManual,
-		Items: []models.ReceiptItem{{Name: "Gadget", Quantity: 1, SuggestedProductID: &pid, MatchSource: "fuzzy", MatchConfidence: &conf}}}
+		Items: []models.ReceiptItem{{Name: "Gadget", Quantity: 1, ProductID: &pid, MatchSource: "llm", MatchConfidence: &conf}}}
 	must(repo.Create(ctx, in))
 	got, err := repo.GetByID(ctx, in.ID)
 	must(err)
 	it := got.Items[0]
-	if it.SuggestedProductID == nil || *it.SuggestedProductID != pid || it.MatchSource != "fuzzy" || it.MatchConfidence == nil || *it.MatchConfidence != conf {
+	if it.ProductID == nil || *it.ProductID != pid || it.MatchSource != "llm" || it.MatchConfidence == nil || *it.MatchConfidence != conf {
 		t.Fatalf("round trip: %+v", it)
 	}
 }

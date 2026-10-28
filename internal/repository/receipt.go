@@ -150,6 +150,9 @@ func insertChildren(ctx context.Context, q txExec, r *models.Receipt, now time.T
 		it := &r.Items[i]
 		oldID := it.ID
 		it.ReceiptID = r.ID
+		if err := matchItem(ctx, q, r.MerchantID, it); err != nil {
+			return err
+		}
 		it.CreatedAt, it.UpdatedAt = now, now
 		err := q.QueryRowContext(ctx, `
 			INSERT INTO receipt_items (
