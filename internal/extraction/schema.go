@@ -12,11 +12,23 @@ Return only JSON matching the schema. Rules:
   e.g. "#0412" -> "0412"), store_address (street line only), store_city, store_state (2-letter
   US state or region code), store_zip, store_phone.
 - purchase_date is YYYY-MM-DD.
-- One items[] entry per printed line in order; quantity may be fractional for weighed goods.
-- discount_cents on an item is a POSITIVE amount taken off that line.
-- savings_cents is the receipt-level "you saved" total if printed, as a POSITIVE amount.
-- adjustments[]: receipt-level coupons/instant savings/discounts as NEGATIVE amount_cents;
-  deposits/fees/tips as POSITIVE amount_cents.
+- Every printed priced line appears exactly once: one items[] entry per purchased product, in
+  printed order. Do not skip lines (also check lines in shadow or near folds) and do not
+  invent or repeat lines. quantity may be fractional for weighed goods.
+- line_total_cents is the price printed on the product's own line, BEFORE any discount
+  (e.g. "2 @ 7.59" then "AVO CHIPS 15.18" -> quantity 2, unit 759, line_total 1518).
+- A discount / instant savings / coupon line that refers to an item (by item number, e.g.
+  "/ 1798566 3.20-", or simply the line right above it) is NOT an item: add it to that item's
+  discount_cents as a POSITIVE amount (3.20- -> 320). Never output such a line as its own item
+  and never subtract it from line_total_cents. Only a receipt-level discount that refers to no
+  item goes in adjustments[] (NEGATIVE amount_cents).
+- Deposits, bottle/redemption fees, bag fees and tips appear exactly once: either as an item
+  (if printed as its own priced line among the items) or in adjustments[] (POSITIVE
+  amount_cents), never both.
+- savings_cents only from a printed receipt-level savings line ("You saved", "Total savings",
+  "Instant savings total"). Never compute it and never copy an item price; null if not printed.
+- Check: sum(line_total_cents) - sum(discount_cents) + sum(adjustments) should equal the
+  printed subtotal. If it does not, re-read the lines before answering.
 - sku / item_number / upc: copy any printed identifiers exactly; null if absent.
 - confidence: your overall confidence 0..1 that totals and items are read correctly.`
 

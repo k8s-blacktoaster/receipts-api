@@ -9,7 +9,7 @@ import (
 )
 
 // PromptVersion is stored on source_documents so extractions can be re-run/compared.
-const PromptVersion = "receipt-v2" // v2: store city/state/zip
+const PromptVersion = "receipt-v3" // v2: store city/state/zip; v3: discount/deposit/savings line rules
 
 // ErrNotImplemented is returned by providers that are wired but not built yet.
 var ErrNotImplemented = errors.New("extraction provider not implemented")
