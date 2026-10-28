@@ -457,3 +457,16 @@ type MapResult struct {
 	AliasID    int64 `json:"alias_id,omitempty"` // 0 when the receipt has no merchant yet
 	AlsoMapped int   `json:"also_mapped"`
 }
+
+// Validate checks a product create request.
+func (p *Product) Validate() error {
+	p.CanonicalName = strings.TrimSpace(p.CanonicalName)
+	p.Brand, p.Category, p.UPC = strings.TrimSpace(p.Brand), strings.TrimSpace(p.Category), strings.TrimSpace(p.UPC)
+	if p.CanonicalName == "" {
+		return errors.New("canonical_name is required")
+	}
+	if err := tooLong(map[string]string{"canonical_name": p.CanonicalName, "brand": p.Brand, "category": p.Category}, MaxNameLen); err != nil {
+		return err
+	}
+	return tooLong(map[string]string{"upc": p.UPC}, MaxShortLen)
+}

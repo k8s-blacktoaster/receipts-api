@@ -157,7 +157,8 @@ func main() {
 	if queue != nil {
 		ui.Queue = queue
 	}
-	handler := router.New(receiptHandler, uploadHandler, ui, logger)
+	productHandler := &handlers.ProductHandler{Products: repository.NewProductRepository(db), Logger: logger}
+	handler := router.New(receiptHandler, uploadHandler, productHandler, ui, logger)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),

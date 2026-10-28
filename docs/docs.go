@@ -47,6 +47,117 @@ const docTemplate = `{
                 }
             }
         },
+        "/products": {
+            "get": {
+                "description": "Canonical products whose name or any merchant alias matches q (substring or trigram); empty q lists products.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "products"
+                ],
+                "summary": "Search products",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Search text",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 10,
+                        "description": "Max results (max 50)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/models.SuccessResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/models.Product"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "products"
+                ],
+                "summary": "Create product",
+                "parameters": [
+                    {
+                        "description": "canonical_name required; brand, category, upc optional",
+                        "name": "product",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.Product"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/models.SuccessResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/models.Product"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "415": {
+                        "description": "Unsupported Media Type",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/receipts": {
             "get": {
                 "description": "Get a paginated list of receipts",
@@ -368,6 +479,140 @@ const docTemplate = `{
                 }
             }
         },
+        "/review/items": {
+            "get": {
+                "description": "Unmapped receipt lines (no product yet) on receipts that are not uploaded/parsing, newest first, with the fuzzy suggestion if any.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "review"
+                ],
+                "summary": "Product review queue",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "default": 50,
+                        "description": "Page size (max 200)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 0,
+                        "description": "Offset",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/models.PaginatedResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/models.ReviewItem"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/review/items/{id}/map": {
+            "post": {
+                "description": "Sets the line's product (match_source manual), learns a merchant-scoped alias (printed text + item number) and applies it to that merchant's other unmapped lines. Give exactly one of product_id or new_product.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "review"
+                ],
+                "summary": "Map a line to a product",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Receipt item ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Target product",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.MapItemRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/models.SuccessResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/models.MapResult"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Item or product not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Receipt is uploaded/parsing",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "415": {
+                        "description": "Unsupported Media Type",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/uploads": {
             "post": {
                 "description": "Converts the image to one normalized, metadata-free JPEG (orientation applied, long edge \u003c= 2000 px), stores it, creates a receipt with status \"uploaded\" and queues extraction. An identical original file (same SHA-256 of the uploaded bytes) returns the existing receipt with 200.",
@@ -468,6 +713,17 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "handlers.MapItemRequest": {
+            "type": "object",
+            "properties": {
+                "new_product": {
+                    "$ref": "#/definitions/models.Product"
+                },
+                "product_id": {
+                    "type": "integer"
+                }
+            }
+        },
         "models.ErrorResponse": {
             "type": "object",
             "properties": {
@@ -482,6 +738,24 @@ const docTemplate = `{
                 },
                 "timestamp": {
                     "type": "string"
+                }
+            }
+        },
+        "models.MapResult": {
+            "type": "object",
+            "properties": {
+                "alias_id": {
+                    "description": "0 when the receipt has no merchant yet",
+                    "type": "integer"
+                },
+                "also_mapped": {
+                    "type": "integer"
+                },
+                "item_id": {
+                    "type": "integer"
+                },
+                "product_id": {
+                    "type": "integer"
                 }
             }
         },
@@ -517,6 +791,29 @@ const docTemplate = `{
                 },
                 "total": {
                     "type": "integer"
+                }
+            }
+        },
+        "models.Product": {
+            "type": "object",
+            "properties": {
+                "brand": {
+                    "type": "string"
+                },
+                "canonical_name": {
+                    "type": "string"
+                },
+                "category": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "upc": {
+                    "type": "string"
                 }
             }
         },
@@ -698,6 +995,13 @@ const docTemplate = `{
                     "description": "printed extended price; derived if 0",
                     "type": "integer"
                 },
+                "match_confidence": {
+                    "type": "number"
+                },
+                "match_source": {
+                    "description": "How ProductID was found (item_number, upc, exact, fuzzy, llm, manual) and how sure.\nWhen ProductID is nil, SuggestedProductID/MatchConfidence carry the review-queue suggestion.",
+                    "type": "string"
+                },
                 "name": {
                     "type": "string"
                 },
@@ -718,6 +1022,9 @@ const docTemplate = `{
                 "sku": {
                     "type": "string"
                 },
+                "suggested_product_id": {
+                    "type": "integer"
+                },
                 "tax_flag": {
                     "type": "string"
                 },
@@ -734,6 +1041,56 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.ReviewItem": {
+            "type": "object",
+            "properties": {
+                "item_id": {
+                    "type": "integer"
+                },
+                "item_number": {
+                    "type": "string"
+                },
+                "line_no": {
+                    "type": "integer"
+                },
+                "line_total_cents": {
+                    "type": "integer"
+                },
+                "match_confidence": {
+                    "type": "number"
+                },
+                "merchant_id": {
+                    "type": "integer"
+                },
+                "merchant_name": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "raw_text": {
+                    "type": "string"
+                },
+                "receipt_date": {
+                    "type": "string"
+                },
+                "receipt_id": {
+                    "type": "integer"
+                },
+                "receipt_status": {
+                    "type": "string"
+                },
+                "suggested_product_id": {
+                    "type": "integer"
+                },
+                "suggested_product_name": {
+                    "type": "string"
+                },
+                "upc": {
                     "type": "string"
                 }
             }

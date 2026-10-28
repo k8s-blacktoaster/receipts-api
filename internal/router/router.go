@@ -19,7 +19,7 @@ import (
 // UI registers the web pages (internal/web); nil disables the UI.
 type UI interface{ Register(r chi.Router) }
 
-func New(receiptHandler *handlers.ReceiptHandler, uploadHandler *handlers.UploadHandler, ui UI, logger *slog.Logger) http.Handler {
+func New(receiptHandler *handlers.ReceiptHandler, uploadHandler *handlers.UploadHandler, productHandler *handlers.ProductHandler, ui UI, logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	// Middleware stack
@@ -49,6 +49,16 @@ func New(receiptHandler *handlers.ReceiptHandler, uploadHandler *handlers.Upload
 
 	if uploadHandler != nil {
 		r.With(httpguard.SameOrigin).Post("/api/v1/uploads", uploadHandler.UploadReceiptPhoto) // POST /api/v1/uploads (multipart)
+	}
+
+	if productHandler != nil {
+		r.Group(func(r chi.Router) {
+			r.Use(httpguard.SameOrigin)
+			r.Get("/api/v1/products", productHandler.SearchProducts)                                    // GET /api/v1/products?q=
+			r.With(httpguard.RequireJSON).Post("/api/v1/products", productHandler.CreateProduct)        // POST /api/v1/products
+			r.Get("/api/v1/review/items", productHandler.ListReviewItems)                               // GET /api/v1/review/items
+			r.With(httpguard.RequireJSON).Post("/api/v1/review/items/{id}/map", productHandler.MapItem) // POST /api/v1/review/items/{id}/map
+		})
 	}
 
 	if ui != nil {
