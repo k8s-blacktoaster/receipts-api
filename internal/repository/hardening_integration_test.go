@@ -33,7 +33,7 @@ func TestF1MerchantDedupeTrimmed(t *testing.T) {
 		t.Fatalf("expected same merchant, got %d vs %d", a.MerchantID, b.MerchantID)
 	}
 	mustExecErr(t, db, "merchants_name_uniq", `INSERT INTO merchants (name) VALUES ('TRADER JOE''S')`)
-	mustExecErr(t, db, "merchants_name_trimmed", `INSERT INTO merchants (name) VALUES (' Other ')`)
+	mustExecErr(t, db, "merchants_name_normalized", `INSERT INTO merchants (name) VALUES (' Other ')`)
 }
 
 // F2: money columns are non-negative; adjustment signs are consistent.
@@ -163,7 +163,7 @@ func TestF7ViewsUseMerchantStore(t *testing.T) {
 // F1/F6 backfill: 005 merges pre-existing whitespace-variant merchants and duplicate stores.
 func TestF1F6BackfillMerges(t *testing.T) {
 	db := testDB(t)
-	if err := database.RollbackMigrations(db, "../../migrations", 1); err != nil {
+	if err := database.RollbackMigrations(db, "../../migrations", 2); err != nil { // to 004
 		t.Fatal(err)
 	}
 	for _, q := range []string{

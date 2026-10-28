@@ -50,5 +50,5 @@ ALTER TABLE stores DROP CONSTRAINT stores_id_merchant_uniq;
 DROP INDEX IF EXISTS stores_merchant_address_uniq;
 
 ALTER TABLE merchants DROP CONSTRAINT merchants_name_trimmed;
-DROP INDEX merchants_name_uniq;
+DROP INDEX IF EXISTS merchants_name_uniq;
 CREATE UNIQUE INDEX merchants_name_uniq ON merchants (lower(name));

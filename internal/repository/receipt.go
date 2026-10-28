@@ -43,8 +43,11 @@ type txExec interface {
 
 // resolveMerchantStore finds or creates the merchant (by case-insensitive name) and,
 // when a store number or address is given, the store location.
+// NormalizeMerchantName trims and collapses internal whitespace (matches the DB unique key).
+func NormalizeMerchantName(s string) string { return strings.Join(strings.Fields(s), " ") }
+
 func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt) error {
-	r.StoreName = strings.TrimSpace(r.StoreName)
+	r.StoreName = NormalizeMerchantName(r.StoreName)
 	r.StoreNumber = strings.TrimSpace(r.StoreNumber)
 	r.StoreAddress = strings.TrimSpace(r.StoreAddress)
 	if r.StoreName == "" {
@@ -52,7 +55,11 @@ func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt) erro
 	}
 	err := q.QueryRowContext(ctx, `
 		INSERT INTO merchants (name, category) VALUES ($1, $2)
-		ON CONFLICT ((lower(btrim(name)))) DO UPDATE SET category = COALESCE(merchants.category, EXCLUDED.category)
+		ON CONFLICT ((lower(regexp_replace(btrim(name), '\s+', ' ', 'g')))) DO UPDATE SET
+			category = COALESCE(merchants.category, EXCLUDED.category),
+			-- upgrade an all-lowercase stored name when a cased variant shows up
+			name = CASE WHEN merchants.name = lower(merchants.name) AND EXCLUDED.name <> lower(EXCLUDED.name)
+			            THEN EXCLUDED.name ELSE merchants.name END
 		RETURNING id`, r.StoreName, nullStr(r.StoreCategory)).Scan(&r.MerchantID)
 	if err != nil {
 		return fmt.Errorf("failed to resolve merchant: %w", err)
