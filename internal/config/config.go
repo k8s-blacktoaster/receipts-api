@@ -39,6 +39,8 @@ type Config struct {
 	ExtractionSweepSec       int
 	ExtractionWorkers        int
 	ExtractionToleranceCents int64
+	// MCPToken is the bearer token for POST /mcp (phase 5). Empty disables the endpoint.
+	MCPToken string
 }
 
 func Load() (*Config, error) {
@@ -69,6 +71,7 @@ func Load() (*Config, error) {
 		ExtractionSweepSec:        getEnvAsInt("EXTRACTION_STALE_SWEEP_INTERVAL", 60),
 		ExtractionWorkers:         getEnvAsInt("EXTRACTION_WORKERS", 2),
 		ExtractionToleranceCents:  int64(getEnvAsInt("EXTRACTION_TOLERANCE_CENTS", 2)),
+		MCPToken:                  strings.TrimSpace(os.Getenv("MCP_TOKEN")),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -96,6 +99,10 @@ func (c *Config) Validate() error {
 	}
 	if !validLogLevels[c.LogLevel] {
 		return fmt.Errorf("invalid LOG_LEVEL: must be debug, info, warn, or error")
+	}
+
+	if c.MCPToken != "" && len(c.MCPToken) < 32 {
+		return fmt.Errorf("MCP_TOKEN must be at least 32 characters (e.g. openssl rand -hex 32)")
 	}
 
 	switch c.ExtractionReasoningEffort {

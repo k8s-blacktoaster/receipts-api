@@ -69,3 +69,19 @@ func TestExtractionTimeoutAndReasoningEffort(t *testing.T) {
 		t.Fatal("invalid effort must fail")
 	}
 }
+
+func TestMCPToken(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x/y_test")
+	t.Setenv("MCP_TOKEN", "")
+	if cfg, err := Load(); err != nil || cfg.MCPToken != "" {
+		t.Fatalf("default: %v %v", cfg, err)
+	}
+	t.Setenv("MCP_TOKEN", "short")
+	if _, err := Load(); err == nil {
+		t.Fatal("short MCP_TOKEN must fail")
+	}
+	t.Setenv("MCP_TOKEN", " 0123456789abcdef0123456789abcdef ")
+	if cfg, err := Load(); err != nil || cfg.MCPToken != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("token: %v", err)
+	}
+}

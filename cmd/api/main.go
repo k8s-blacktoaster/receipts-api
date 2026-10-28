@@ -32,6 +32,7 @@ import (
 	"receipts-db/internal/extraction"
 	"receipts-db/internal/handlers"
 	"receipts-db/internal/imaging"
+	"receipts-db/internal/mcp"
 	"receipts-db/internal/redact"
 	"receipts-db/internal/repository"
 	"receipts-db/internal/router"
@@ -158,7 +159,16 @@ func main() {
 		ui.Queue = queue
 	}
 	productHandler := &handlers.ProductHandler{Products: repository.NewProductRepository(db), Logger: logger}
-	handler := router.New(receiptHandler, uploadHandler, productHandler, ui, logger)
+	var mounts []router.Mount
+	if cfg.MCPToken != "" {
+		mcpServer := &mcp.Server{Name: "receipts-api", Version: "1.0", Logger: logger,
+			Tools: mcp.Tools(mcp.Deps{Query: repository.NewQueryRepository(db), Products: repository.NewProductRepository(db)})}
+		mounts = append(mounts, router.Mount{Path: "/mcp", Handler: mcp.RequireBearer(cfg.MCPToken, mcpServer)})
+		logger.Info("MCP endpoint enabled", "path", "/mcp", "tools", len(mcpServer.Tools))
+	} else {
+		logger.Warn("MCP endpoint disabled (set MCP_TOKEN to enable)")
+	}
+	handler := router.New(receiptHandler, uploadHandler, productHandler, ui, logger, mounts...)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),
