@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -44,8 +45,23 @@ func (f *fakeReceipts) Update(_ context.Context, r *models.Receipt) error {
 func (f *fakeReceipts) SetStatus(_ context.Context, id int, status, reason string, _ *int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if !models.CanTransition(f.r.Status, status) {
+		return fmt.Errorf("fake: invalid transition %s -> %s", f.r.Status, status)
+	}
+	f.r.Status = status
 	f.calls = append(f.calls, statusCall{status, reason})
 	return nil
+}
+
+func (f *fakeReceipts) ClaimForParsing(_ context.Context, id int) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !models.CanTransition(f.r.Status, models.StatusParsing) {
+		return false, nil
+	}
+	f.r.Status = models.StatusParsing
+	f.calls = append(f.calls, statusCall{models.StatusParsing, ""})
+	return true, nil
 }
 
 type fakeDocs struct {
@@ -113,7 +129,8 @@ func TestPipelineParsed(t *testing.T) {
 	if statuses(fr.calls) != "parsing>parsed" || fr.calls[1].reason != "" {
 		t.Fatalf("transitions: %+v", fr.calls)
 	}
-	if fr.updated.StoreName != "Sprouts Farmers Market" || fr.updated.Status != models.StatusParsed || len(fr.updated.Items) != 3 {
+	if fr.updated.StoreName != "Sprouts Farmers Market" || fr.updated.Status != models.StatusParsing || // status is flipped by SetStatus after Update
+		len(fr.updated.Items) != 3 {
 		t.Fatalf("update: %+v", fr.updated)
 	}
 	if strings.Join(fd.states, ">") != "extracting>parsed" || !json.Valid(fd.raw) || fd.model != "stub-1" {
@@ -152,6 +169,27 @@ func TestPipelineProviderFailure(t *testing.T) {
 	if fd.states[len(fd.states)-1] != "failed" {
 		t.Fatalf("doc: %v", fd.states)
 	}
+}
+
+func TestPipelineSkipsUnclaimable(t *testing.T) {
+	for _, st := range []string{models.StatusParsing, models.StatusReviewed} {
+		prov := &countingProvider{}
+		p, fr, _ := setup(t, prov)
+		fr.r.Status = st
+		out, err := p.Process(context.Background(), 11)
+		if err != nil || out.Status != StatusSkipped || prov.n != 0 {
+			t.Fatalf("%s: out=%v err=%v calls=%d", st, out, err, prov.n)
+		}
+	}
+}
+
+type countingProvider struct{ n int }
+
+func (c *countingProvider) Name() string  { return "count" }
+func (c *countingProvider) Model() string { return "count-1" }
+func (c *countingProvider) Extract(context.Context, []Image) (*Result, error) {
+	c.n++
+	return nil, errors.New("unused")
 }
 
 func TestPipelineRedactsStoredError(t *testing.T) {

@@ -17,6 +17,7 @@ type ReceiptStore interface {
 	GetByID(ctx context.Context, id int) (*models.Receipt, error)
 	Update(ctx context.Context, r *models.Receipt) error
 	SetStatus(ctx context.Context, id int, status, parseError string, reviewerID *int64) error
+	ClaimForParsing(ctx context.Context, id int) (bool, error)
 }
 
 // DocStore is the subset of the source-document repository the pipeline needs.
@@ -39,6 +40,9 @@ type Pipeline struct {
 	ToleranceCents int64
 	Logger         *slog.Logger
 }
+
+// StatusSkipped is returned when another worker already holds (or finished) the receipt.
+const StatusSkipped = "skipped"
 
 // Outcome is the final state of one Process call.
 type Outcome struct {
@@ -82,9 +86,16 @@ func (p *Pipeline) Process(ctx context.Context, receiptID int) (*Outcome, error)
 	if p.Provider == nil {
 		return p.fail(ctx, rc, docID, nil, "", errors.New("extraction disabled (no provider configured)"))
 	}
-	if err := p.Receipts.SetStatus(ctx, rc.ID, models.StatusParsing, "", nil); err != nil {
+	// Atomic claim: only one worker/replica moves this receipt into "parsing".
+	claimed, err := p.Receipts.ClaimForParsing(ctx, rc.ID)
+	if err != nil {
 		return nil, err
 	}
+	if !claimed {
+		p.log().Info("extraction skipped; receipt not claimable", "receipt_id", rc.ID, "status", rc.Status)
+		return &Outcome{Status: StatusSkipped}, nil
+	}
+	rc.Status = models.StatusParsing
 	_ = p.Docs.SaveExtraction(ctx, docID, "extracting", nil, p.Provider.Model(), PromptVersion, "")
 
 	doc, err := p.Docs.GetByID(ctx, docID)
@@ -113,7 +124,9 @@ func (p *Pipeline) Process(ctx context.Context, receiptID int) (*Outcome, error)
 	if len(reasons) > 0 {
 		status = models.StatusNeedsReview
 	}
-	rc.Status = status
+	// Update writes fields/items while still "parsing"; SetStatus then performs the
+	// checked parsing -> parsed|needs_review transition.
+	rc.Status = models.StatusParsing
 	if err := p.Receipts.Update(ctx, rc); err != nil {
 		return p.fail(ctx, rc, docID, res.Raw, res.Model, fmt.Errorf("save extraction: %w", err))
 	}

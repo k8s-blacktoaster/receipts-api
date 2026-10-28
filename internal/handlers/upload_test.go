@@ -221,6 +221,12 @@ func TestReextract(t *testing.T) {
 	if c := call("/api/v1/receipts/9/extract"); c != 400 {
 		t.Fatalf("manual receipt: %d", c)
 	}
+	for _, st := range []string{models.StatusParsing, models.StatusReviewed} {
+		h.Receipts = fakeLookup{r: &models.Receipt{ID: 9, SourceDocumentID: &doc, Status: st}}
+		if c := call("/api/v1/receipts/9/extract"); c != 409 {
+			t.Fatalf("%s: want 409, got %d", st, c)
+		}
+	}
 	h.Receipts = fakeLookup{r: &models.Receipt{ID: 9, SourceDocumentID: &doc}}
 	h.Queue = nil
 	if c := call("/api/v1/receipts/9/extract"); c != 503 {

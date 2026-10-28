@@ -180,13 +180,16 @@ func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Reques
 // ReextractReceipt handles POST /api/v1/receipts/{id}/extract
 //
 //	@Summary		Re-run extraction
-//	@Description	Queues extraction again for a photo receipt (e.g. after "failed"). Overwrites parsed items.
+//	@Description	Queues extraction again for a photo receipt in uploaded, parsed, needs_review or failed status. Overwrites parsed items.
+//	@Description	Returns 409 while the receipt is being parsed, and always 409 for a "reviewed" receipt: v1 never
+//	@Description	overwrites human-reviewed data and has no force option (reopen it to needs_review first).
 //	@Tags			uploads
 //	@Produce		json
 //	@Param			id	path		int	true	"Receipt ID"
 //	@Success		202	{object}	models.SuccessResponse{data=models.UploadResult}	"Queued"
 //	@Failure		400	{object}	models.ErrorResponse	"Not a photo receipt"
 //	@Failure		404	{object}	models.ErrorResponse	"Receipt not found"
+//	@Failure		409	{object}	models.ErrorResponse	"Extraction in progress, or receipt already reviewed"
 //	@Failure		503	{object}	models.ErrorResponse	"Extraction disabled"
 //	@Router			/receipts/{id}/extract [post]
 func (h *UploadHandler) ReextractReceipt(w http.ResponseWriter, r *http.Request) {
@@ -206,6 +209,15 @@ func (h *UploadHandler) ReextractReceipt(w http.ResponseWriter, r *http.Request)
 	}
 	if rc.SourceDocumentID == nil {
 		h.respond(w, http.StatusBadRequest, "Receipt has no photo", nil)
+		return
+	}
+	// Advisory fast-fail; the pipeline's atomic DB claim is what actually prevents double parsing.
+	switch rc.Status {
+	case models.StatusParsing:
+		h.respond(w, http.StatusConflict, "Extraction already in progress", nil)
+		return
+	case models.StatusReviewed:
+		h.respond(w, http.StatusConflict, "Receipt is reviewed; re-extraction is not allowed (v1 has no force option)", nil)
 		return
 	}
 	if h.Queue == nil {

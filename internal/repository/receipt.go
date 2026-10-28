@@ -16,6 +16,10 @@ import (
 // ErrNotFound is returned when a row does not exist.
 var ErrNotFound = errors.New("receipt not found")
 
+// ErrInvalidTransition is returned when a status change is not in models' transition table
+// (or the receipt changed status concurrently).
+var ErrInvalidTransition = errors.New("invalid receipt status transition")
+
 type ReceiptRepository interface {
 	Create(ctx context.Context, receipt *models.Receipt) error
 	GetByID(ctx context.Context, id int) (*models.Receipt, error)
@@ -27,7 +31,12 @@ type ReceiptRepository interface {
 	UpdateItem(ctx context.Context, item *models.ReceiptItem) error
 	// ListIDsByStatus returns receipt ids in the given statuses, oldest first (worker recovery).
 	ListIDsByStatus(ctx context.Context, statuses ...string) ([]int, error)
-	// SetStatus moves a receipt through the photo pipeline.
+	// ClaimForParsing atomically moves a photo receipt into "parsing" if it is in a
+	// re-extractable status. Exactly one concurrent caller gets true.
+	ClaimForParsing(ctx context.Context, id int) (bool, error)
+	// ResetStaleParsing moves receipts stuck in "parsing" longer than olderThan back to "uploaded".
+	ResetStaleParsing(ctx context.Context, olderThan time.Duration) (int, error)
+	// SetStatus moves a receipt through the photo pipeline (transition table enforced).
 	SetStatus(ctx context.Context, id int, status, parseError string, reviewerID *int64) error
 }
 
@@ -331,6 +340,10 @@ func (r *receiptRepo) UpdateItem(ctx context.Context, it *models.ReceiptItem) er
 }
 
 func (r *receiptRepo) SetStatus(ctx context.Context, id int, status, parseError string, reviewerID *int64) error {
+	from := models.StatusesAllowedInto(status)
+	if len(from) == 0 {
+		return fmt.Errorf("%w: unknown status %q", ErrInvalidTransition, status)
+	}
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE receipts SET
 			status = $2,
@@ -339,14 +352,45 @@ func (r *receiptRepo) SetStatus(ctx context.Context, id int, status, parseError 
 			parsed_at = CASE WHEN $2 IN ('parsed','needs_review') THEN now() ELSE parsed_at END,
 			reviewed_at = CASE WHEN $2 = 'reviewed' THEN now() ELSE reviewed_at END,
 			reviewed_by_id = CASE WHEN $2 = 'reviewed' THEN $4 ELSE reviewed_by_id END
-		WHERE id = $1`, id, status, nullStr(parseError), reviewerID)
+		WHERE id = $1 AND status = ANY($5)`, id, status, nullStr(parseError), reviewerID, pq.Array(from))
 	if err != nil {
 		return fmt.Errorf("failed to set status: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
+		var cur string
+		if err := r.db.QueryRowContext(ctx, `SELECT status FROM receipts WHERE id = $1`, id).Scan(&cur); errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, cur, status)
 	}
 	return nil
+}
+
+func (r *receiptRepo) ClaimForParsing(ctx context.Context, id int) (bool, error) {
+	var got int
+	err := r.db.QueryRowContext(ctx, `
+		UPDATE receipts SET status = 'parsing', parse_started_at = now(), parse_error = NULL
+		WHERE id = $1 AND source_document_id IS NOT NULL AND status = ANY($2)
+		RETURNING id`, id, pq.Array(models.ReextractableStatuses())).Scan(&got)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to claim receipt: %w", err)
+	}
+	return true, nil
+}
+
+func (r *receiptRepo) ResetStaleParsing(ctx context.Context, olderThan time.Duration) (int, error) {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE receipts SET status = 'uploaded'
+		WHERE status = 'parsing' AND (parse_started_at IS NULL OR parse_started_at < now() - $1::interval)`,
+		fmt.Sprintf("%d milliseconds", olderThan.Milliseconds()))
+	if err != nil {
+		return 0, fmt.Errorf("failed to reset stale parsing: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 func (r *receiptRepo) Delete(ctx context.Context, id int) error {
