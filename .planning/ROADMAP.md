@@ -48,7 +48,10 @@ assets embedded in the Go binary (`embed`), served by the same deployment, VPN-o
 
 ### Phase 5: MCP server
 **Depends on**: Phase 4
-**Requirements**: MCP-01..MCP-03
+**Requirements**: MCP-01..MCP-06
+**Notes**: merchant-name inputs are normalized with the shared Go function (MCP-04); list_merchants
+(MCP-05); pg_trgm fuzzy fallback for nicknames like "TJ's" (MCP-06) uses the merchants.name GIN
+trigram index from migration 006.
 
 ### Phase 6: Kubernetes deploy & backups
 **Depends on**: Phase 2 (can run in parallel with 3-5)

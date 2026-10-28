@@ -28,6 +28,9 @@
 - [ ] **MCP-01**: Streamable HTTP MCP endpoint with read-only tools (search, where-bought, spend, price history)
 - [ ] **MCP-02**: Every answer returns receipt ids/dates so results are verifiable
 - [ ] **MCP-03**: MCP requires authentication
+- [ ] **MCP-04**: Every MCP tool that takes a merchant name runs models.NormalizeMerchantName on its input before lookup
+- [ ] **MCP-05**: list_merchants tool (normalized names, with receipt counts / last visit)
+- [ ] **MCP-06**: No exact normalized match -> fuzzy fallback via pg_trgm similarity() on merchants.name returns ranked candidates, so the bot can resolve nicknames like "TJ's"
 ### Deploy
 - [ ] **OPS-01**: Manifests for api(+UI), worker, mcp, Postgres (CNPG), object store, secrets
 - [ ] **OPS-02**: Nightly DB backup + image bucket backup, tested restore
