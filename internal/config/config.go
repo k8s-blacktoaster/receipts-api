@@ -21,13 +21,15 @@ type Config struct {
 
 	// Uploads / extraction (phase 2). XAI_API_KEY must come from the environment (k8s Secret);
 	// it is never read from files in the repo and never logged.
-	UploadDir                string
-	MaxUploadBytes           int64
-	ExtractionProvider       string
-	ExtractionModel          string
-	XAIAPIKey                string
-	XAIBaseURL               string
-	ExtractionTimeoutSec     int
+	UploadDir            string
+	MaxUploadBytes       int64
+	ExtractionProvider   string
+	ExtractionModel      string
+	XAIAPIKey            string
+	XAIBaseURL           string
+	ExtractionTimeoutSec int
+	// ExtractionShutdownSec is how long SIGTERM waits for in-flight extractions.
+	ExtractionShutdownSec    int
 	ExtractionWorkers        int
 	ExtractionToleranceCents int64
 }
@@ -53,6 +55,7 @@ func Load() (*Config, error) {
 		XAIAPIKey:                os.Getenv("XAI_API_KEY"),
 		XAIBaseURL:               getEnv("XAI_BASE_URL", "https://api.x.ai/v1"),
 		ExtractionTimeoutSec:     getEnvAsInt("EXTRACTION_TIMEOUT_SECONDS", 120),
+		ExtractionShutdownSec:    getEnvAsInt("EXTRACTION_SHUTDOWN_TIMEOUT", 25),
 		ExtractionWorkers:        getEnvAsInt("EXTRACTION_WORKERS", 2),
 		ExtractionToleranceCents: int64(getEnvAsInt("EXTRACTION_TOLERANCE_CENTS", 2)),
 	}

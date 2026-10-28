@@ -15,13 +15,23 @@ type Processor interface {
 }
 
 // Queue is an in-process worker pool. Durable state lives in receipts.status, so on restart
-// RequeuePending re-enqueues receipts left in uploaded/parsing (no separate jobs table yet).
+// ResetStaleParsing + RequeuePending pick up unfinished receipts (no separate jobs table yet).
+// Concurrency safety does not depend on the queue: the pipeline claims each receipt atomically
+// in the DB. The queue additionally coalesces duplicate enqueues of a receipt that is already
+// queued or running, so bursts of re-extract requests do not pile up.
 type Queue struct {
 	ch      chan int
 	p       Processor
 	timeout time.Duration
 	log     *slog.Logger
 	wg      sync.WaitGroup
+
+	mu      sync.Mutex
+	pending map[int]bool // queued or running
+	closed  bool
+	stop    chan struct{}      // closed by Shutdown: workers take no new jobs
+	jobCtx  context.Context    // parent of every job context
+	abort   context.CancelFunc // cancels in-flight jobs (shutdown timeout)
 }
 
 func NewQueue(p Processor, size int, timeout time.Duration, log *slog.Logger) *Queue {
@@ -34,14 +44,27 @@ func NewQueue(p Processor, size int, timeout time.Duration, log *slog.Logger) *Q
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Queue{ch: make(chan int, size), p: p, timeout: timeout, log: log}
+	jctx, abort := context.WithCancel(context.Background())
+	return &Queue{ch: make(chan int, size), p: p, timeout: timeout, log: log,
+		pending: map[int]bool{}, stop: make(chan struct{}), jobCtx: jctx, abort: abort}
 }
 
-// Enqueue never blocks; if the buffer is full the receipt stays "uploaded" and is picked up
-// by the next RequeuePending.
+// Enqueue never blocks. It returns false if the queue is shut down or full (the receipt stays
+// in the DB and is picked up by the next RequeuePending). A receipt already queued or running
+// is coalesced (returns true without adding a second job).
 func (q *Queue) Enqueue(receiptID int) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		q.log.Warn("extraction queue shut down; receipt left pending", "receipt_id", receiptID)
+		return false
+	}
+	if q.pending[receiptID] {
+		return true
+	}
 	select {
 	case q.ch <- receiptID:
+		q.pending[receiptID] = true
 		return true
 	default:
 		q.log.Warn("extraction queue full; receipt left pending", "receipt_id", receiptID)
@@ -49,37 +72,90 @@ func (q *Queue) Enqueue(receiptID int) bool {
 	}
 }
 
-// Start runs n workers until ctx is cancelled.
+// Start runs n workers until ctx is cancelled or Shutdown is called. Cancelling ctx also
+// cancels in-flight jobs; Shutdown lets them finish (up to its timeout).
 func (q *Queue) Start(ctx context.Context, n int) {
 	if n <= 0 {
 		n = 1
 	}
+	go func() {
+		select {
+		case <-ctx.Done():
+			q.abort()
+		case <-q.jobCtx.Done():
+		}
+	}()
 	for i := 0; i < n; i++ {
 		q.wg.Add(1)
 		go func() {
 			defer q.wg.Done()
 			for {
+				// prefer stopping over taking another job
 				select {
-				case <-ctx.Done():
+				case <-q.stop:
+					return
+				case <-q.jobCtx.Done():
+					return
+				default:
+				}
+				select {
+				case <-q.stop:
+					return
+				case <-q.jobCtx.Done():
 					return
 				case id := <-q.ch:
-					jctx, cancel := context.WithTimeout(ctx, q.timeout)
-					if _, err := q.p.Process(jctx, id); err != nil {
-						q.log.Error("extraction pipeline error", "receipt_id", id, "error", redact.String(err.Error()))
-					}
-					cancel()
+					q.run(id)
 				}
 			}
 		}()
 	}
 }
 
-// Wait blocks until workers exit (after ctx cancel).
+func (q *Queue) run(id int) {
+	defer func() {
+		q.mu.Lock()
+		delete(q.pending, id)
+		q.mu.Unlock()
+	}()
+	jctx, cancel := context.WithTimeout(q.jobCtx, q.timeout)
+	defer cancel()
+	if _, err := q.p.Process(jctx, id); err != nil {
+		q.log.Error("extraction pipeline error", "receipt_id", id, "error", redact.String(err.Error()))
+	}
+}
+
+// Wait blocks until workers exit.
 func (q *Queue) Wait() { q.wg.Wait() }
 
-// RequeuePending enqueues receipts still in uploaded/parsing.
+// Shutdown stops accepting jobs, lets in-flight jobs finish for up to timeout, then cancels
+// them. Jobs still buffered are dropped; they remain uploaded/parsing in the DB and are
+// recovered by the next startup's ResetStaleParsing + RequeuePending. Returns true if all
+// in-flight jobs finished within the timeout.
+func (q *Queue) Shutdown(timeout time.Duration) bool {
+	q.mu.Lock()
+	if !q.closed {
+		q.closed = true
+		close(q.stop)
+	}
+	q.mu.Unlock()
+	done := make(chan struct{})
+	go func() { q.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		q.abort()
+		return true
+	case <-time.After(timeout):
+		q.log.Warn("extraction shutdown timeout; cancelling in-flight jobs", "timeout", timeout)
+		q.abort()
+		<-done
+		return false
+	}
+}
+
+// RequeuePending enqueues receipts still "uploaded" (call ResetStaleParsing first so
+// receipts abandoned mid-parse are back in "uploaded").
 func (q *Queue) RequeuePending(ctx context.Context, list func(ctx context.Context, statuses ...string) ([]int, error)) {
-	ids, err := list(ctx, "uploaded", "parsing")
+	ids, err := list(ctx, "uploaded")
 	if err != nil {
 		q.log.Error("requeue pending failed", "error", err)
 		return

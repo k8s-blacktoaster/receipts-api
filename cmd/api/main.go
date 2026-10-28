@@ -118,6 +118,13 @@ func main() {
 			ToleranceCents: cfg.ExtractionToleranceCents, Logger: logger}
 		queue = extraction.NewQueue(pipeline, 100, time.Duration(cfg.ExtractionTimeoutSec+30)*time.Second, logger)
 		queue.Start(workerCtx, cfg.ExtractionWorkers)
+		// Receipts left "parsing" by a previous process (crash or shutdown timeout) go back to
+		// "uploaded" once older than the job timeout, then everything "uploaded" is requeued.
+		if n, err := receiptRepo.ResetStaleParsing(workerCtx, time.Duration(cfg.ExtractionTimeoutSec+30)*time.Second); err != nil {
+			logger.Error("reset stale parsing failed", "error", err)
+		} else if n > 0 {
+			logger.Info("reset stale parsing receipts", "count", n)
+		}
 		queue.RequeuePending(workerCtx, receiptRepo.ListIDsByStatus)
 	}
 	uploadHandler := &handlers.UploadHandler{Store: docRepo, Receipts: receiptRepo, Blobs: blobs,
@@ -153,14 +160,19 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
-		logger.Error("server forced to shutdown", "error", err)
-		os.Exit(1)
+	httpErr := srv.Shutdown(ctx)
+	if httpErr != nil {
+		logger.Error("server forced to shutdown", "error", httpErr)
 	}
 
-	stopWorkers()
 	if queue != nil {
-		queue.Wait()
+		// stop taking jobs; let in-flight provider calls finish up to EXTRACTION_SHUTDOWN_TIMEOUT
+		if !queue.Shutdown(time.Duration(cfg.ExtractionShutdownSec) * time.Second) {
+			logger.Warn("in-flight extractions cancelled; they will be retried on next start")
+		}
+	}
+	if httpErr != nil {
+		os.Exit(1)
 	}
 	logger.Info("server stopped")
 }

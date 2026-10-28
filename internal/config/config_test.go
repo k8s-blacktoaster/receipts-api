@@ -31,3 +31,14 @@ func TestExtractionConfigFromEnv(t *testing.T) {
 		t.Fatal("negative tolerance must fail")
 	}
 }
+
+func TestExtractionShutdownTimeout(t *testing.T) {
+	t.Setenv("EXTRACTION_SHUTDOWN_TIMEOUT", "")
+	if c, _ := Load(); c.ExtractionShutdownSec != 25 {
+		t.Fatalf("default = %d", c.ExtractionShutdownSec)
+	}
+	t.Setenv("EXTRACTION_SHUTDOWN_TIMEOUT", "7")
+	if c, _ := Load(); c.ExtractionShutdownSec != 7 {
+		t.Fatalf("env = %d", c.ExtractionShutdownSec)
+	}
+}
