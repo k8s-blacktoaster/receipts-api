@@ -49,4 +49,7 @@ ING-03, ING-04, ING-05
 | Graceful shutdown | `Queue.Shutdown(EXTRACTION_SHUTDOWN_TIMEOUT, default 25s)`: no new jobs, waits for in-flight, cancels on timeout. Startup `ResetStaleParsing` then requeue `uploaded`. | `TestQueueShutdownWaitsForInFlight`, `TestQueueShutdownTimeoutCancelsInFlight`, `TestQueueCoalescesDuplicates`, `TestExtractionShutdownTimeout` |
 
 Tests now: 59 pass, 0 fail (`go test -race -p 1` with TEST_DATABASE_URL on throwaway PG 55432; `-p 1` because integration packages share one test DB). Migrations up / down all / up OK.
-Not changed: `PUT /receipts/{id}` can still set `status` directly (not routed through the transition table); candidate for the review UI phase.
+~~Not changed: `PUT /receipts/{id}` could still set `status` directly.~~ Fixed in round 2 (below).
+
+### QA round 2: PUT status
+`PUT /api/v1/receipts/{id}` now routes status changes through the transition table (`receiptRepo.Update` locks the row with `SELECT ... FOR UPDATE`, rejects invalid moves with `ErrInvalidTransition`; handler returns 409 "Invalid status transition from X to Y; receipt unchanged"). Omitted status keeps the current one (it used to reset to the default); same status is allowed; `parsing` can only be entered via `ClaimForParsing`; unknown values stay 400. Tests: `TestUpdateReceiptStatusTransitions` (handler: valid, omitted, same, reviewed->uploaded 409, ->parsing 409, bogus 400) and `TestUpdateRoutesStatusThroughTransitionTable` (Postgres: rejected updates leave the row unchanged). Closes the PUT gap noted above. Tests: 61 pass, 0 fail.

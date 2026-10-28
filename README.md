@@ -95,7 +95,7 @@ The API includes a complete Receipts CRUD API:
 | GET | `/api/v1/receipts` | List all receipts |
 | GET | `/api/v1/receipts/{id}` | Get a single receipt |
 | POST | `/api/v1/receipts` | Create a new receipt |
-| PUT | `/api/v1/receipts/{id}` | Update an existing receipt |
+| PUT | `/api/v1/receipts/{id}` | Update an existing receipt; omitted or unchanged `status` is kept, a status change must follow the transition table (409 otherwise, receipt unchanged; 400 for unknown values) |
 | DELETE | `/api/v1/receipts/{id}` | Delete a receipt |
 | POST | `/api/v1/uploads` | Upload a receipt photo (multipart `image`, JPEG/PNG, max 20 MiB); 202 + queued extraction, 200 if the same image was already uploaded |
 | POST | `/api/v1/receipts/{id}/extract` | Re-run extraction for a photo receipt; 409 while parsing and always 409 for `reviewed` receipts (no force option in v1) |
@@ -109,7 +109,7 @@ required field is missing or the printed total does not match subtotal + tax - s
 subtotal + tax + adjustments) within `EXTRACTION_TOLERANCE_CENTS`.
 
 Status changes follow a fixed transition table (`internal/models/status.go`); invalid changes are
-rejected. A worker claims a receipt with one atomic `UPDATE ... WHERE status IN (...) RETURNING`,
+rejected with 409, including via `PUT /receipts/{id}`, which can never set `parsing`. A worker claims a receipt with one atomic `UPDATE ... WHERE status IN (...) RETURNING`,
 so concurrent workers, replicas or repeated `/extract` calls never parse the same receipt twice.
 `POST /receipts/{id}/extract` returns **409** while the receipt is `parsing`, and **always 409 for
 a `reviewed` receipt**: v1 never overwrites human-reviewed data and has no force option.

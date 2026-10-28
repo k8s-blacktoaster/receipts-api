@@ -186,7 +186,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "Update an existing receipt's information",
+                "description": "Update an existing receipt's information. Omitting \"status\" (or sending the current one)\nkeeps it; a change must follow the status transition table (e.g. parsed -\u003e reviewed),\notherwise 409 and the receipt is left unchanged. \"parsing\" is only set by the extraction worker.",
                 "consumes": [
                     "application/json"
                 ],
@@ -230,6 +230,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Receipt not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Invalid status transition",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
