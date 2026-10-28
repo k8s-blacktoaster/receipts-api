@@ -132,3 +132,27 @@ func TestMerchantBackfillMerge(t *testing.T) {
 		t.Fatalf("merge: receipts=%d stores=%d aliases=%d orphan=%d onDupStore=%d", tjReceipts, stores, aliases, orphan, onDupStore)
 	}
 }
+
+// 006 trigram index exists and similarity() ranks a nickname to the right merchant.
+func TestMerchantTrigramIndexAndSimilarity(t *testing.T) {
+	db := testDB(t)
+	var n int
+	db.QueryRow(`SELECT count(*) FROM pg_indexes WHERE indexname = 'idx_merchants_name_trgm' AND indexdef LIKE '%gin_trgm_ops%'`).Scan(&n)
+	if n != 1 {
+		t.Fatal("idx_merchants_name_trgm missing")
+	}
+	for _, m := range []string{"trader_joes", "target", "costco", "whole_foods"} {
+		if _, err := db.Exec(`INSERT INTO merchants (name) VALUES ($1)`, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var best string
+	var sim float64
+	q := models.NormalizeMerchantName("Trader Joe")
+	if err := db.QueryRow(`SELECT name, similarity(name, $1) FROM merchants ORDER BY similarity(name, $1) DESC LIMIT 1`, q).Scan(&best, &sim); err != nil {
+		t.Fatal(err)
+	}
+	if best != "trader_joes" || sim <= 0.3 {
+		t.Fatalf("best=%q sim=%v", best, sim)
+	}
+}

@@ -57,3 +57,8 @@ UPDATE merchants SET name = 'unknown_' || id WHERE name = '';
 CREATE UNIQUE INDEX merchants_name_uniq ON merchants (name);
 ALTER TABLE merchants ADD CONSTRAINT merchants_name_normalized
     CHECK (name <> '' AND name = merchant_name_key(name));
+
+-- Fuzzy merchant lookup for the MCP phase (nicknames like "TJ's"): trigram index on the key.
+-- pg_trgm is a "trusted" extension (PG13+), so the database owner can create it without superuser.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX idx_merchants_name_trgm ON merchants USING gin (name gin_trgm_ops);
