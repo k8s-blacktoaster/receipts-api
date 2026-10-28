@@ -20,6 +20,9 @@ var ErrNotFound = errors.New("receipt not found")
 // (or the receipt changed status concurrently).
 var ErrInvalidTransition = errors.New("invalid receipt status transition")
 
+// ErrReceiptBusy is returned by Update while the receipt is being parsed (any body).
+var ErrReceiptBusy = errors.New("receipt is being parsed")
+
 type ReceiptRepository interface {
 	Create(ctx context.Context, receipt *models.Receipt) error
 	GetByID(ctx context.Context, id int) (*models.Receipt, error)
@@ -33,9 +36,17 @@ type ReceiptRepository interface {
 	ListIDsByStatus(ctx context.Context, statuses ...string) ([]int, error)
 	// ClaimForParsing atomically moves a photo receipt into "parsing" if it is in a
 	// re-extractable status. Exactly one concurrent caller gets true.
-	ClaimForParsing(ctx context.Context, id int) (bool, error)
-	// ResetStaleParsing moves receipts stuck in "parsing" longer than olderThan back to "uploaded".
-	ResetStaleParsing(ctx context.Context, olderThan time.Duration) (int, error)
+	ClaimForParsing(ctx context.Context, id int) (models.ClaimToken, bool, error)
+	// CompleteParse writes the extracted receipt (fields + children) and status parsed|needs_review,
+	// only if the row is still "parsing" under token; otherwise models.ErrClaimLost and nothing is written.
+	CompleteParse(ctx context.Context, rc *models.Receipt, token models.ClaimToken, status, reason string) error
+	// FailParse sets "failed" + parse_error under the same condition.
+	FailParse(ctx context.Context, id int, token models.ClaimToken, reason string) error
+	// ReleaseClaim puts an aborted job back to "uploaded" under the same condition (false = not ours anymore).
+	ReleaseClaim(ctx context.Context, id int, token models.ClaimToken) (bool, error)
+	// ResetStaleParsing moves receipts stuck in "parsing" longer than olderThan back to
+	// "uploaded" and returns their ids.
+	ResetStaleParsing(ctx context.Context, olderThan time.Duration) ([]int, error)
 	// SetStatus moves a receipt through the photo pipeline (transition table enforced).
 	SetStatus(ctx context.Context, id int, status, parseError string, reviewerID *int64) error
 }
@@ -286,13 +297,26 @@ func (r *receiptRepo) Update(ctx context.Context, receipt *models.Receipt) error
 		}
 		return fmt.Errorf("failed to load receipt status: %w", err)
 	}
+	if current == models.StatusParsing {
+		return ErrReceiptBusy // the worker owns it; its final write would race this edit
+	}
 	if requested == "" {
 		receipt.Status = current
-	} else if requested != current && (requested == models.StatusParsing || !models.CanTransition(current, requested)) {
-		// entering "parsing" is reserved for ClaimForParsing
+	} else if requested != current && !models.UserCanTransition(current, requested) {
 		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, current, requested)
 	}
 
+	if err := writeReceiptTx(ctx, tx, receipt); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return nil
+}
+
+// writeReceiptTx writes header fields and replaces children. Callers have locked the row.
+func writeReceiptTx(ctx context.Context, tx *sql.Tx, receipt *models.Receipt) error {
 	if err := resolveMerchantStore(ctx, tx, receipt); err != nil {
 		return err
 	}
@@ -322,13 +346,7 @@ func (r *receiptRepo) Update(ctx context.Context, receipt *models.Receipt) error
 	if _, err := tx.ExecContext(ctx, "DELETE FROM receipt_items WHERE receipt_id = $1", receipt.ID); err != nil {
 		return fmt.Errorf("failed to delete existing items: %w", err)
 	}
-	if err := insertChildren(ctx, tx, receipt, receipt.UpdatedAt); err != nil {
-		return err
-	}
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-	return nil
+	return insertChildren(ctx, tx, receipt, receipt.UpdatedAt)
 }
 
 func (r *receiptRepo) UpdateItem(ctx context.Context, it *models.ReceiptItem) error {
@@ -383,31 +401,94 @@ func (r *receiptRepo) SetStatus(ctx context.Context, id int, status, parseError 
 	return nil
 }
 
-func (r *receiptRepo) ClaimForParsing(ctx context.Context, id int) (bool, error) {
-	var got int
+func (r *receiptRepo) ClaimForParsing(ctx context.Context, id int) (models.ClaimToken, bool, error) {
+	var tok time.Time
+	// clock_timestamp() (not now()) so two claims in one transaction still differ
 	err := r.db.QueryRowContext(ctx, `
-		UPDATE receipts SET status = 'parsing', parse_started_at = now(), parse_error = NULL
+		UPDATE receipts SET status = 'parsing', parse_started_at = clock_timestamp(), parse_error = NULL
 		WHERE id = $1 AND source_document_id IS NOT NULL AND status = ANY($2)
-		RETURNING id`, id, pq.Array(models.ReextractableStatuses())).Scan(&got)
+		RETURNING parse_started_at`, id, pq.Array(models.ReextractableStatuses())).Scan(&tok)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return models.ClaimToken{}, false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("failed to claim receipt: %w", err)
+		return models.ClaimToken{}, false, fmt.Errorf("failed to claim receipt: %w", err)
 	}
-	return true, nil
+	return models.ClaimToken(tok), true, nil
 }
 
-func (r *receiptRepo) ResetStaleParsing(ctx context.Context, olderThan time.Duration) (int, error) {
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE receipts SET status = 'uploaded'
-		WHERE status = 'parsing' AND (parse_started_at IS NULL OR parse_started_at < now() - $1::interval)`,
-		fmt.Sprintf("%d milliseconds", olderThan.Milliseconds()))
+const claimedWhere = `id = $1 AND status = 'parsing' AND parse_started_at = $2`
+
+func (r *receiptRepo) CompleteParse(ctx context.Context, rc *models.Receipt, token models.ClaimToken, status, reason string) error {
+	if status != models.StatusParsed && status != models.StatusNeedsReview {
+		return fmt.Errorf("%w: parsing -> %s", ErrInvalidTransition, status)
+	}
+	rc.Normalize()
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("failed to reset stale parsing: %w", err)
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+	var one int
+	err = tx.QueryRowContext(ctx, `SELECT 1 FROM receipts WHERE `+claimedWhere+` FOR UPDATE`, rc.ID, time.Time(token)).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return models.ErrClaimLost
+	}
+	if err != nil {
+		return fmt.Errorf("failed to lock receipt: %w", err)
+	}
+	rc.Status = status
+	if err := writeReceiptTx(ctx, tx, rc); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE receipts SET parse_error = $2, parsed_at = now() WHERE id = $1`, rc.ID, nullStr(reason)); err != nil {
+		return fmt.Errorf("failed to record parse result: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return nil
+}
+
+func (r *receiptRepo) FailParse(ctx context.Context, id int, token models.ClaimToken, reason string) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE receipts SET status = 'failed', parse_error = $3 WHERE `+claimedWhere,
+		id, time.Time(token), nullStr(reason))
+	if err != nil {
+		return fmt.Errorf("failed to record parse failure: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return models.ErrClaimLost
+	}
+	return nil
+}
+
+func (r *receiptRepo) ReleaseClaim(ctx context.Context, id int, token models.ClaimToken) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `UPDATE receipts SET status = 'uploaded' WHERE `+claimedWhere, id, time.Time(token))
+	if err != nil {
+		return false, fmt.Errorf("failed to release claim: %w", err)
 	}
 	n, _ := res.RowsAffected()
-	return int(n), nil
+	return n == 1, nil
+}
+
+func (r *receiptRepo) ResetStaleParsing(ctx context.Context, olderThan time.Duration) ([]int, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		UPDATE receipts SET status = 'uploaded'
+		WHERE status = 'parsing' AND (parse_started_at IS NULL OR parse_started_at < now() - $1::interval)
+		RETURNING id`, fmt.Sprintf("%d milliseconds", olderThan.Milliseconds()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to reset stale parsing: %w", err)
+	}
+	defer rows.Close()
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func (r *receiptRepo) Delete(ctx context.Context, id int) error {

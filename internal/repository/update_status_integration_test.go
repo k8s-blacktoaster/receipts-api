@@ -55,6 +55,24 @@ func TestUpdateRoutesStatusThroughTransitionTable(t *testing.T) {
 	if err := edit(models.StatusParsing, "Sprouts E"); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("needs_review -> parsing via Update: %v", err)
 	}
+	// worker-only targets
+	for _, bad := range []string{models.StatusFailed, models.StatusUploaded} {
+		if err := edit(bad, "nope"); !errors.Is(err, ErrInvalidTransition) {
+			t.Fatalf("needs_review -> %s via Update: %v", bad, err)
+		}
+	}
+	// while parsing, every edit is refused (even without a status) and nothing changes
+	if _, err := db.Exec(`UPDATE receipts SET status='parsing' WHERE id=$1`, rc.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []string{"", models.StatusParsing, models.StatusReviewed} {
+		if err := edit(st, "RACING EDIT"); !errors.Is(err, ErrReceiptBusy) {
+			t.Fatalf("edit while parsing (%q): %v", st, err)
+		}
+	}
+	if got, _ := repo.GetByID(ctx, rc.ID); got.StoreName != "Sprouts D" || got.Status != models.StatusParsing {
+		t.Fatalf("busy edit changed row: %s %s", got.Status, got.StoreName)
+	}
 	// missing receipt
 	if err := repo.Update(ctx, &models.Receipt{ID: 999999, StoreName: "X", Date: "2026-10-01"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing: %v", err)

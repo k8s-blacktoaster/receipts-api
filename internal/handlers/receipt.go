@@ -171,8 +171,9 @@ func (h *ReceiptHandler) CreateReceipt(w http.ResponseWriter, r *http.Request) {
 //
 //	@Summary		Update receipt
 //	@Description	Update an existing receipt's information. Omitting "status" (or sending the current one)
-//	@Description	keeps it; a change must follow the status transition table (e.g. parsed -> reviewed),
-//	@Description	otherwise 409 and the receipt is left unchanged. "parsing" is only set by the extraction worker.
+//	@Description	keeps it. Users may only make review moves: parsed -> needs_review|reviewed, needs_review -> reviewed,
+//	@Description	failed -> reviewed, reviewed -> needs_review. Anything else (e.g. to parsing, failed or uploaded) is 409.
+//	@Description	While the receipt is "parsing" every PUT is 409. On 409 the receipt is left unchanged.
 //	@Tags			receipts
 //	@Accept			json
 //	@Produce		json
@@ -181,7 +182,7 @@ func (h *ReceiptHandler) CreateReceipt(w http.ResponseWriter, r *http.Request) {
 //	@Success		200		{object}	models.SuccessResponse	"Updated receipt"
 //	@Failure		400		{object}	models.ErrorResponse	"Bad request"
 //	@Failure		404		{object}	models.ErrorResponse	"Receipt not found"
-//	@Failure		409		{object}	models.ErrorResponse	"Invalid status transition"
+//	@Failure		409		{object}	models.ErrorResponse	"Invalid status transition, or receipt is being parsed"
 //	@Failure		500		{object}	models.ErrorResponse	"Internal server error"
 //	@Router			/receipts/{id} [put]
 func (h *ReceiptHandler) UpdateReceipt(w http.ResponseWriter, r *http.Request) {
@@ -213,6 +214,10 @@ func (h *ReceiptHandler) UpdateReceipt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.Update(ctx, &receipt); err != nil {
+		if errors.Is(err, repository.ErrReceiptBusy) {
+			h.respondWithError(w, http.StatusConflict, "Receipt is being parsed; retry after extraction finishes (receipt unchanged)")
+			return
+		}
 		if errors.Is(err, repository.ErrInvalidTransition) {
 			move := strings.Replace(strings.TrimPrefix(err.Error(), repository.ErrInvalidTransition.Error()+": "), " -> ", " to ", 1)
 			h.respondWithError(w, http.StatusConflict, "Invalid status transition from "+move+"; receipt unchanged")

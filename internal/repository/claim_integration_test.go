@@ -184,20 +184,20 @@ func TestClaimForParsingIsAtomic(t *testing.T) {
 	if err := receipts.SetStatus(ctx, rc.ID, models.StatusReviewed, "", nil); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := receipts.ClaimForParsing(ctx, rc.ID); ok || err != nil {
+	if _, ok, err := receipts.ClaimForParsing(ctx, rc.ID); ok || err != nil {
 		t.Fatalf("claimed reviewed receipt: %v %v", ok, err)
 	}
 	// stale parsing reset
 	if _, err := db.Exec(`UPDATE receipts SET status='parsing', parse_started_at=now()-interval '1 hour' WHERE id=$1`, rc.ID); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := receipts.ResetStaleParsing(ctx, time.Minute); err != nil || n != 1 {
-		t.Fatalf("reset: %d %v", n, err)
+	if ids, err := receipts.ResetStaleParsing(ctx, time.Minute); err != nil || len(ids) != 1 || ids[0] != rc.ID {
+		t.Fatalf("reset: %v %v", ids, err)
 	}
-	if ok, _ := receipts.ClaimForParsing(ctx, rc.ID); !ok {
+	if _, ok, _ := receipts.ClaimForParsing(ctx, rc.ID); !ok {
 		t.Fatal("reset receipt should be claimable")
 	}
-	if n, _ := receipts.ResetStaleParsing(ctx, time.Minute); n != 0 {
+	if ids, _ := receipts.ResetStaleParsing(ctx, time.Minute); len(ids) != 0 {
 		t.Fatal("fresh claim must not be reset")
 	}
 }

@@ -24,6 +24,7 @@ type fakeReceipts struct {
 	calls    []statusCall
 	updated  *models.Receipt
 	updateEr error
+	tok      models.ClaimToken
 }
 
 func (f *fakeReceipts) GetByID(_ context.Context, id int) (*models.Receipt, error) {
@@ -32,15 +33,41 @@ func (f *fakeReceipts) GetByID(_ context.Context, id int) (*models.Receipt, erro
 	cp := *f.r
 	return &cp, nil
 }
-func (f *fakeReceipts) Update(_ context.Context, r *models.Receipt) error {
+func (f *fakeReceipts) CompleteParse(_ context.Context, r *models.Receipt, tok models.ClaimToken, status, reason string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.r.Status != models.StatusParsing || tok != f.tok {
+		return models.ErrClaimLost
+	}
 	if f.updateEr != nil {
 		return f.updateEr
 	}
 	cp := *r
+	cp.Status = status
 	f.updated = &cp
+	f.r.Status = status
+	f.calls = append(f.calls, statusCall{status, reason})
 	return nil
+}
+func (f *fakeReceipts) FailParse(_ context.Context, id int, tok models.ClaimToken, reason string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.r.Status != models.StatusParsing || tok != f.tok {
+		return models.ErrClaimLost
+	}
+	f.r.Status = models.StatusFailed
+	f.calls = append(f.calls, statusCall{models.StatusFailed, reason})
+	return nil
+}
+func (f *fakeReceipts) ReleaseClaim(_ context.Context, id int, tok models.ClaimToken) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.r.Status != models.StatusParsing || tok != f.tok {
+		return false, nil
+	}
+	f.r.Status = models.StatusUploaded
+	f.calls = append(f.calls, statusCall{models.StatusUploaded, "released"})
+	return true, nil
 }
 func (f *fakeReceipts) SetStatus(_ context.Context, id int, status, reason string, _ *int64) error {
 	f.mu.Lock()
@@ -53,15 +80,16 @@ func (f *fakeReceipts) SetStatus(_ context.Context, id int, status, reason strin
 	return nil
 }
 
-func (f *fakeReceipts) ClaimForParsing(_ context.Context, id int) (bool, error) {
+func (f *fakeReceipts) ClaimForParsing(_ context.Context, id int) (models.ClaimToken, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !models.CanTransition(f.r.Status, models.StatusParsing) {
-		return false, nil
+		return models.ClaimToken{}, false, nil
 	}
 	f.r.Status = models.StatusParsing
+	f.tok = models.ClaimToken(time.Unix(0, time.Now().UnixNano()))
 	f.calls = append(f.calls, statusCall{models.StatusParsing, ""})
-	return true, nil
+	return f.tok, true, nil
 }
 
 type fakeDocs struct {
@@ -129,7 +157,7 @@ func TestPipelineParsed(t *testing.T) {
 	if statuses(fr.calls) != "parsing>parsed" || fr.calls[1].reason != "" {
 		t.Fatalf("transitions: %+v", fr.calls)
 	}
-	if fr.updated.StoreName != "Sprouts Farmers Market" || fr.updated.Status != models.StatusParsing || // status is flipped by SetStatus after Update
+	if fr.updated.StoreName != "Sprouts Farmers Market" || fr.updated.Status != models.StatusParsed ||
 		len(fr.updated.Items) != 3 {
 		t.Fatalf("update: %+v", fr.updated)
 	}
@@ -278,3 +306,46 @@ func TestQueue(t *testing.T) {
 		t.Fatalf("processed %v", cp.ids)
 	}
 }
+
+// A provider call cancelled mid-flight (shutdown timeout) releases the claim back to uploaded.
+func TestPipelineCancelledJobReleasesClaim(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	p, fr, _ := setup(t, cancelProvider{cancel: cancel})
+	out, err := p.Process(ctx, 11)
+	if err != nil || out.Status != StatusAborted || fr.r.Status != models.StatusUploaded || statuses(fr.calls) != "parsing>uploaded" {
+		t.Fatalf("out=%v err=%v calls=%+v", out, err, fr.calls)
+	}
+}
+
+type cancelProvider struct{ cancel context.CancelFunc }
+
+func (c cancelProvider) Name() string  { return "cancel" }
+func (c cancelProvider) Model() string { return "cancel-1" }
+func (c cancelProvider) Extract(ctx context.Context, _ []Image) (*Result, error) {
+	c.cancel()
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// If the claim was lost (sweep reset + re-claim) the result is discarded, never written.
+func TestPipelineClaimLostDiscardsResult(t *testing.T) {
+	var fr *fakeReceipts
+	steal := providerFunc(func() (*Result, error) {
+		fr.mu.Lock()
+		fr.tok = models.ClaimToken(time.Unix(1, 0)) // someone else's claim now
+		fr.mu.Unlock()
+		return result(t, "receipt_ok.json"), nil
+	})
+	var p *Pipeline
+	p, fr, _ = setup(t, steal)
+	out, err := p.Process(context.Background(), 11)
+	if err != nil || out.Status != StatusSkipped || fr.updated != nil || fr.r.Status != models.StatusParsing {
+		t.Fatalf("out=%v err=%v updated=%v", out, err, fr.updated)
+	}
+}
+
+type providerFunc func() (*Result, error)
+
+func (f providerFunc) Name() string                                      { return "fn" }
+func (f providerFunc) Model() string                                     { return "fn-1" }
+func (f providerFunc) Extract(context.Context, []Image) (*Result, error) { return f() }

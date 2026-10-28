@@ -22,9 +22,12 @@ type statusRepo struct {
 }
 
 func (s *statusRepo) Update(_ context.Context, r *models.Receipt) error {
+	if s.status == models.StatusParsing {
+		return repository.ErrReceiptBusy
+	}
 	if r.Status == "" {
 		r.Status = s.status
-	} else if r.Status != s.status && (r.Status == models.StatusParsing || !models.CanTransition(s.status, r.Status)) {
+	} else if r.Status != s.status && !models.UserCanTransition(s.status, r.Status) {
 		return fmt.Errorf("%w: %s -> %s", repository.ErrInvalidTransition, s.status, r.Status)
 	}
 	s.status = r.Status
@@ -55,6 +58,12 @@ func TestUpdateReceiptStatusTransitions(t *testing.T) {
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/receipts/5", strings.NewReader(body)))
 		if rec.Code != c.code || repo.status != c.want {
 			t.Errorf("%s%s: code=%d status=%s body=%s", c.from, c.body, rec.Code, repo.status, rec.Body)
+		}
+		if c.from == models.StatusParsing {
+			if !strings.Contains(rec.Body.String(), "being parsed") || repo.updates != 0 {
+				t.Errorf("busy 409: %s", rec.Body)
+			}
+			continue
 		}
 		if c.code == 409 && !strings.Contains(rec.Body.String(), "Invalid status transition from "+c.from+" to ") {
 			t.Errorf("409 message unclear: %s", rec.Body)
