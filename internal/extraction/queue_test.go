@@ -14,6 +14,7 @@ type blockingProc struct {
 	calls   atomic.Int32
 	done    atomic.Int32
 	ctxErr  atomic.Int32
+	status  string
 }
 
 func (b *blockingProc) Process(ctx context.Context, id int) (*Outcome, error) {
@@ -25,7 +26,7 @@ func (b *blockingProc) Process(ctx context.Context, id int) (*Outcome, error) {
 	case <-ctx.Done():
 		b.ctxErr.Add(1)
 	}
-	return &Outcome{}, nil
+	return &Outcome{Status: b.status}, nil
 }
 
 func newBlocking() *blockingProc {
@@ -86,5 +87,30 @@ func TestQueueShutdownTimeoutCancelsInFlight(t *testing.T) {
 	}
 	if time.Since(start) > time.Second || b.ctxErr.Load() != 1 {
 		t.Fatalf("in-flight job not cancelled: %d", b.ctxErr.Load())
+	}
+}
+
+// An enqueue while the receipt's job is running, where that job then skips (lost claim), runs
+// once more right after it instead of being dropped by the dedupe.
+func TestQueueRerunsWhenEnqueuedWhileRunning(t *testing.T) {
+	b := newBlocking()
+	b.status = StatusSkipped
+	q := NewQueue(b, 10, time.Minute, nil)
+	q.Start(context.Background(), 2)
+	defer q.Shutdown(time.Second)
+	q.Enqueue(5)
+	<-b.started
+	q.Enqueue(5)
+	q.Enqueue(5) // coalesced with the pending rerun
+	b.release <- struct{}{}
+	select {
+	case <-b.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("rerun did not start")
+	}
+	b.release <- struct{}{}
+	time.Sleep(50 * time.Millisecond)
+	if n := b.calls.Load(); n != 2 {
+		t.Fatalf("calls = %d, want 2", n)
 	}
 }

@@ -236,3 +236,30 @@ func TestPutWhileParsingIsRefused(t *testing.T) {
 		t.Fatalf("PUT failed: %d", rec.Code)
 	}
 }
+
+// Re-extract after the running job lost its claim (sweep reset) is served immediately by a
+// rerun, not left for the next sweep.
+func TestReextractAfterLostClaimRequeuesImmediately(t *testing.T) {
+	db := repository.TestDB(t)
+	ctx := context.Background()
+	receipts, docs, blobs := repository.NewReceiptRepository(db), repository.NewSourceDocumentRepository(db), storage.NewMemory()
+	prov := &timedProvider{d: 400 * time.Millisecond, entered: make(chan struct{})}
+	a := newApp(t, receipts, docs, blobs, prov, time.Minute)
+	defer a.q.Shutdown(5 * time.Second)
+	id := a.upload(t)
+	<-prov.entered
+	// the sweep decides the claim is abandoned
+	if _, err := db.Exec(`UPDATE receipts SET parse_started_at = now() - interval '1 hour' WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if ids, _ := receipts.ResetStaleParsing(ctx, time.Minute); len(ids) != 1 {
+		t.Fatalf("reset %v", ids)
+	}
+	if rec := a.call(http.MethodPost, "/api/v1/receipts/"+strconv.Itoa(id)+"/extract", ""); rec.Code != 202 {
+		t.Fatalf("re-extract: %d %s", rec.Code, rec.Body)
+	}
+	waitStatus(t, receipts, id, models.StatusParsed)
+	if n := prov.calls.Load(); n != 2 {
+		t.Fatalf("provider calls = %d, want 2 (lost-claim job + immediate rerun)", n)
+	}
+}
