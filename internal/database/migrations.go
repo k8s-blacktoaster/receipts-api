@@ -17,6 +17,11 @@ type Migration struct {
 }
 
 func RunMigrations(db *DB, migrationsPath string) error {
+	return RunMigrationsN(db, migrationsPath, 0)
+}
+
+// RunMigrationsN applies at most steps pending migrations, oldest first (steps <= 0 = all).
+func RunMigrationsN(db *DB, migrationsPath string, steps int) error {
 	if err := createMigrationsTable(db); err != nil {
 		return fmt.Errorf("failed to create migrations table: %w", err)
 	}
@@ -31,9 +36,13 @@ func RunMigrations(db *DB, migrationsPath string) error {
 		return fmt.Errorf("failed to get applied migrations: %w", err)
 	}
 
+	done := 0
 	for _, migration := range migrations {
 		if _, ok := applied[migration.Version]; ok {
 			continue // Already applied
+		}
+		if steps > 0 && done >= steps {
+			break
 		}
 
 		slog.Info("applying migration", "version", migration.Version, "name", migration.Name)
@@ -61,6 +70,7 @@ func RunMigrations(db *DB, migrationsPath string) error {
 		}
 
 		slog.Info("migration applied successfully", "version", migration.Version)
+		done++
 	}
 
 	return nil
