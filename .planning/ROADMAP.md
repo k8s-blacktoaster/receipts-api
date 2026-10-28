@@ -48,7 +48,7 @@ VPN-only, no chat. Multi-photo receipts deferred (one photo per upload).
 
 ### Phase 4: Normalization & review
 **Depends on**: Phase 2 (UI from Phase 3 consumes it)
-**Requirements**: NORM-01..NORM-03 (NORM-03: colliding aliases kept with item_number cleared, not dropped)
+**Requirements**: NORM-01..NORM-04 (NORM-03: colliding aliases kept with item_number cleared, not dropped; NORM-04: substring merchant/location check)
 **Success Criteria**: >=90% of lines with an item number/UPC auto-map; corrections create merchant-scoped aliases reused next time (pg_trgm fuzzy indexes land here)
 
 ### Phase 5: MCP server
@@ -60,7 +60,7 @@ trigram index from migration 006.
 
 ### Phase 6: Kubernetes deploy & backups
 **Depends on**: Phase 2 (can run in parallel with 3-5)
-**Requirements**: OPS-01..OPS-06 (OPS-03: UTF-8 locale/collation, or explicit collation in merchant_name_key)
+**Requirements**: OPS-01..OPS-07 (OPS-03: UTF-8 locale/collation, or explicit collation in merchant_name_key; OPS-07: memory limit + global pixel budget)
 **Plan notes** (mirror /Users/michael/_code/world-cup-site, read 2026-10-27):
   - `.github/workflows/build-api.yml`: on push to main (paths filter) + workflow_dispatch,
     `runs-on: [self-hosted, k3s]`, sha7 tag, `docker build --target test .` gate, build, push
