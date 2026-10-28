@@ -51,6 +51,7 @@ type Members interface {
 type Merchants interface {
 	List(ctx context.Context) ([]models.Merchant, error)
 	Rename(ctx context.Context, id int64, newName string) (*models.Merchant, error)
+	Merge(ctx context.Context, from, into int64) (*repository.MergeResult, error)
 }
 
 type Docs interface {
@@ -136,6 +137,7 @@ func (u *UI) Register(r chi.Router) {
 		r.Post("/member", u.setMember)
 		r.Get("/merchants", u.merchants)
 		r.Post("/merchants/{id}/rename", u.rename)
+		r.Post("/merchants/{id}/merge", u.merge)
 	})
 }
 
@@ -156,6 +158,13 @@ type page struct {
 	Receipt   *models.Receipt
 	Merchants []models.Merchant
 	Next      string
+	// MergeOffer is set when a rename collided: offer merging FromID into Into.
+	MergeOffer *mergeOffer
+}
+
+type mergeOffer struct {
+	FromID int64
+	Into   models.Merchant
 }
 
 func (u *UI) render(w http.ResponseWriter, r *http.Request, code int, name string, p *page) {
@@ -498,8 +507,11 @@ func (u *UI) rename(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		redirectMsg(w, r, "/merchants", "Renamed to "+m.Name)
 	case errors.As(err, &conflict):
-		fail(http.StatusConflict, fmt.Sprintf("A merchant named %q already exists (#%d, %d receipts). Rename refused: merging merchants is not supported yet.",
-			conflict.Existing.Name, conflict.Existing.ID, conflict.Existing.ReceiptCount))
+		ms, _ := u.Merchants.List(r.Context())
+		u.render(w, r, http.StatusConflict, "merchants", &page{Title: "Merchants", Merchants: ms,
+			Err: fmt.Sprintf("A merchant named %q already exists (#%d, %d receipts). Rename refused; you can merge into it instead.",
+				conflict.Existing.Name, conflict.Existing.ID, conflict.Existing.ReceiptCount),
+			MergeOffer: &mergeOffer{FromID: id, Into: conflict.Existing}})
 	case errors.Is(err, repository.ErrInvalidMerchantName):
 		fail(http.StatusBadRequest, "The name must contain a letter or digit")
 	case errors.Is(err, repository.ErrNotFound):
@@ -507,5 +519,34 @@ func (u *UI) rename(w http.ResponseWriter, r *http.Request) {
 	default:
 		u.Logger.Error("rename merchant", "error", err)
 		fail(http.StatusInternalServerError, "Could not rename")
+	}
+}
+
+func (u *UI) merge(w http.ResponseWriter, r *http.Request) {
+	fail := func(code int, msg string) {
+		ms, _ := u.Merchants.List(r.Context())
+		u.render(w, r, code, "merchants", &page{Title: "Merchants", Merchants: ms, Err: msg})
+	}
+	from, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	_ = r.ParseForm()
+	into, err2 := strconv.ParseInt(r.PostForm.Get("into_id"), 10, 64)
+	if err != nil || err2 != nil || from <= 0 || into <= 0 {
+		fail(http.StatusBadRequest, "Pick a merchant to merge into")
+		return
+	}
+	res, err := u.Merchants.Merge(r.Context(), from, into)
+	switch {
+	case err == nil:
+		redirectMsg(w, r, "/merchants", fmt.Sprintf("Merged into %s: %d receipts, %d stores, %d aliases moved",
+			res.Into.Name, res.Receipts, res.StoresMoved+res.StoresFolded, res.AliasesMoved))
+	case errors.Is(err, repository.ErrSelfMerge):
+		fail(http.StatusBadRequest, "A merchant cannot be merged into itself")
+	case errors.Is(err, repository.ErrNotFound):
+		fail(http.StatusNotFound, "Merchant not found")
+	case errors.Is(err, repository.ErrReceiptBusy):
+		fail(http.StatusConflict, "A receipt of this merchant is still being extracted; try again when it finishes")
+	default:
+		u.Logger.Error("merge merchant", "error", err)
+		fail(http.StatusInternalServerError, "Could not merge")
 	}
 }

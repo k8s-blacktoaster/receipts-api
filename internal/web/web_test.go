@@ -137,6 +137,28 @@ type fakeQueue struct{ ids []int }
 
 func (q *fakeQueue) Enqueue(id int) bool { q.ids = append(q.ids, id); return true }
 
+func (f *fakeMerchants) Merge(_ context.Context, from, into int64) (*repository.MergeResult, error) {
+	if from == into {
+		return nil, repository.ErrSelfMerge
+	}
+	var src, dst = -1, -1
+	for i := range f.m {
+		switch f.m[i].ID {
+		case from:
+			src = i
+		case into:
+			dst = i
+		}
+	}
+	if src < 0 || dst < 0 {
+		return nil, repository.ErrNotFound
+	}
+	f.m[dst].ReceiptCount += f.m[src].ReceiptCount
+	res := &repository.MergeResult{Into: f.m[dst], Receipts: f.m[src].ReceiptCount}
+	f.m = append(f.m[:src], f.m[src+1:]...)
+	return res, nil
+}
+
 type env struct {
 	ui  *UI
 	rs  *fakeReceipts
@@ -386,11 +408,37 @@ func TestMerchantRename(t *testing.T) {
 		t.Fatalf("rename: %d %+v", rec.Code, e.ms.m)
 	}
 	rec = e.do(http.MethodPost, "/merchants/1/rename", url.Values{"name": {"Trader Joe's"}}, false)
-	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "already exists (#2, 4 receipts)") || e.ms.m[0].Name != "sprouts_farmers_market" {
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "already exists (#2, 4 receipts)") || e.ms.m[0].Name != "sprouts_farmers_market" ||
+		!strings.Contains(rec.Body.String(), `action="/merchants/1/merge"`) || !strings.Contains(rec.Body.String(), "Merge #1 into trader_joes") {
 		t.Fatalf("collision: %d %s", rec.Code, rec.Body)
 	}
 	if rec := e.do(http.MethodPost, "/merchants/1/rename", url.Values{"name": {"!!"}}, false); rec.Code != 400 {
 		t.Fatalf("empty: %d", rec.Code)
+	}
+}
+
+func TestMerchantMergeUI(t *testing.T) {
+	e := newEnv(t)
+	for _, c := range []struct {
+		path, into string
+		code       int
+	}{{"/merchants/1/merge", "1", 400}, {"/merchants/1/merge", "", 400}, {"/merchants/1/merge", "99", 404}, {"/merchants/x/merge", "2", 400}} {
+		if rec := e.do(http.MethodPost, c.path, url.Values{"into_id": {c.into}}, false); rec.Code != c.code {
+			t.Errorf("%s into=%q: %d want %d", c.path, c.into, rec.Code, c.code)
+		}
+	}
+	rec := e.do(http.MethodPost, "/merchants/1/merge", url.Values{"into_id": {"2"}}, false)
+	if rec.Code != 303 || len(e.ms.m) != 1 || !strings.Contains(rec.Header().Get("Location"), "Merged+into+trader_joes") {
+		t.Fatalf("merge: %d %v %s", rec.Code, e.ms.m, rec.Header().Get("Location"))
+	}
+	// cross-site POST refused
+	req := httptest.NewRequest(http.MethodPost, "/merchants/2/merge", strings.NewReader("into_id=1"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://evil.example")
+	rr := httptest.NewRecorder()
+	e.srv.ServeHTTP(rr, req)
+	if rr.Code != 403 {
+		t.Fatalf("cross-site merge: %d", rr.Code)
 	}
 }
 
