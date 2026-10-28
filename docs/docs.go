@@ -348,11 +348,26 @@ const docTemplate = `{
         "models.Receipt": {
             "type": "object",
             "properties": {
+                "adjustments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.ReceiptAdjustment"
+                    }
+                },
+                "confidence": {
+                    "type": "number"
+                },
                 "created_at": {
-                    "description": "Metadata",
+                    "type": "string"
+                },
+                "currency": {
                     "type": "string"
                 },
                 "date": {
+                    "description": "YYYY-MM-DD (local purchase date)",
+                    "type": "string"
+                },
+                "external_id": {
                     "type": "string"
                 },
                 "id": {
@@ -364,22 +379,103 @@ const docTemplate = `{
                         "$ref": "#/definitions/models.ReceiptItem"
                     }
                 },
+                "member_id": {
+                    "description": "whose purchase (nullable: legacy/unattributed)",
+                    "type": "integer"
+                },
+                "merchant_id": {
+                    "type": "integer"
+                },
+                "parse_error": {
+                    "type": "string"
+                },
+                "parse_started_at": {
+                    "type": "string"
+                },
+                "parsed_at": {
+                    "type": "string"
+                },
+                "payment_last4": {
+                    "type": "string"
+                },
+                "payment_method": {
+                    "type": "string"
+                },
+                "purchased_at": {
+                    "type": "string"
+                },
+                "reviewed_at": {
+                    "type": "string"
+                },
+                "reviewed_by_id": {
+                    "type": "integer"
+                },
+                "savings_cents": {
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "source_document_id": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                },
                 "store_address": {
                     "type": "string"
                 },
                 "store_category": {
                     "type": "string"
                 },
+                "store_id": {
+                    "type": "integer"
+                },
                 "store_name": {
+                    "description": "Merchant / location as printed. Used to resolve merchant_id / store_id on write.",
+                    "type": "string"
+                },
+                "store_number": {
                     "type": "string"
                 },
                 "store_phone": {
                     "type": "string"
                 },
-                "subtotal": {
-                    "type": "number"
+                "subtotal_cents": {
+                    "type": "integer"
+                },
+                "tax_cents": {
+                    "type": "integer"
+                },
+                "total_cents": {
+                    "type": "integer"
                 },
                 "updated_at": {
+                    "type": "string"
+                },
+                "uploaded_by_id": {
+                    "description": "who uploaded the photo",
+                    "type": "integer"
+                }
+            }
+        },
+        "models.ReceiptAdjustment": {
+            "type": "object",
+            "properties": {
+                "amount_cents": {
+                    "description": "negative reduces the total",
+                    "type": "integer"
+                },
+                "applies_to_item_id": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "raw_text": {
                     "type": "string"
                 }
             }
@@ -388,26 +484,69 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "created_at": {
-                    "description": "Metadata",
                     "type": "string"
                 },
                 "description": {
                     "type": "string"
                 },
+                "discount_cents": {
+                    "description": "instant savings / coupon on this line (positive)",
+                    "type": "integer"
+                },
+                "edited_at": {
+                    "description": "set when changed during review",
+                    "type": "string"
+                },
                 "id": {
+                    "type": "integer"
+                },
+                "is_return": {
+                    "type": "boolean"
+                },
+                "item_number": {
+                    "type": "string"
+                },
+                "line_no": {
+                    "type": "integer"
+                },
+                "line_total_cents": {
+                    "description": "printed extended price; derived if 0",
                     "type": "integer"
                 },
                 "name": {
                     "type": "string"
                 },
-                "quantity": {
+                "net_total_cents": {
+                    "description": "read-only: line_total - discount",
                     "type": "integer"
+                },
+                "product_id": {
+                    "type": "integer"
+                },
+                "quantity": {
+                    "description": "fractional for weighted items (NUMERIC(12,3))",
+                    "type": "number"
+                },
+                "raw_text": {
+                    "type": "string"
                 },
                 "sku": {
                     "type": "string"
                 },
-                "unit_price": {
-                    "type": "number"
+                "tax_flag": {
+                    "type": "string"
+                },
+                "taxable": {
+                    "type": "boolean"
+                },
+                "unit": {
+                    "type": "string"
+                },
+                "unit_price_cents": {
+                    "type": "integer"
+                },
+                "upc": {
+                    "type": "string"
                 },
                 "updated_at": {
                     "type": "string"
