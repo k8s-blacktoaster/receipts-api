@@ -13,6 +13,8 @@ import (
 
 // SourceDocumentRepository stores uploaded photos' metadata and raw extraction output.
 type SourceDocumentRepository interface {
+	// MemberExists reports whether members.id = id (validates upload form fields up front).
+	MemberExists(ctx context.Context, id int64) (bool, error)
 	// FindReceiptBySHA returns the receipt created for an identical image, if any.
 	FindReceiptBySHA(ctx context.Context, sha []byte) (receiptID int, docID int64, status string, found bool, err error)
 	// CreateUpload inserts the document and its pending receipt in one transaction.
@@ -26,6 +28,14 @@ type sourceDocRepo struct{ db *database.DB }
 
 func NewSourceDocumentRepository(db *database.DB) SourceDocumentRepository {
 	return &sourceDocRepo{db: db}
+}
+
+func (r *sourceDocRepo) MemberExists(ctx context.Context, id int64) (bool, error) {
+	var ok bool
+	if err := r.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM members WHERE id = $1)`, id).Scan(&ok); err != nil {
+		return false, fmt.Errorf("failed to check member: %w", err)
+	}
+	return ok, nil
 }
 
 func (r *sourceDocRepo) FindReceiptBySHA(ctx context.Context, sha []byte) (int, int64, string, bool, error) {

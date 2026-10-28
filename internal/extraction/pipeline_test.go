@@ -101,7 +101,7 @@ func setup(t *testing.T, p Provider) (*Pipeline, *fakeReceipts, *fakeDocs) {
 	t.Helper()
 	doc := int64(3)
 	blobs := storage.NewMemory()
-	_ = blobs.Put(context.Background(), "receipts/ab/abc.jpg", jpeg)
+	_, _ = blobs.Put(context.Background(), "receipts/ab/abc.jpg", jpeg)
 	fr := &fakeReceipts{r: &models.Receipt{ID: 11, Source: models.SourcePhoto, Status: models.StatusUploaded, SourceDocumentID: &doc}}
 	fd := &fakeDocs{doc: models.SourceDocument{ID: 3, ObjectKey: "receipts/ab/abc.jpg", MimeType: "image/jpeg"}}
 	return &Pipeline{Receipts: fr, Docs: fd, Blobs: blobs, Provider: p}, fr, fd

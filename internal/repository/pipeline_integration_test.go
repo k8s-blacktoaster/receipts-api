@@ -39,7 +39,7 @@ func uploadFixture(t *testing.T, docs SourceDocumentRepository, blobs storage.Bl
 	t.Helper()
 	sum := sha256.Sum256(data)
 	key := "receipts/test/" + string(rune('a'+data[0]%26)) + ".jpg"
-	if err := blobs.Put(context.Background(), key, data); err != nil {
+	if _, err := blobs.Put(context.Background(), key, data); err != nil {
 		t.Fatal(err)
 	}
 	rc := &models.Receipt{Source: models.SourcePhoto, Status: models.StatusUploaded}

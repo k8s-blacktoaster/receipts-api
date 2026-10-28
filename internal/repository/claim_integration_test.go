@@ -140,7 +140,7 @@ func TestClaimForParsingIsAtomic(t *testing.T) {
 	receipts, docs := repository.NewReceiptRepository(db), repository.NewSourceDocumentRepository(db)
 	blobs := storage.NewMemory()
 	data := pngFile(t)
-	if err := blobs.Put(ctx, "receipts/claim.png", data); err != nil {
+	if _, err := blobs.Put(ctx, "receipts/claim.png", data); err != nil {
 		t.Fatal(err)
 	}
 	rc := &models.Receipt{Source: models.SourcePhoto, Status: models.StatusUploaded}

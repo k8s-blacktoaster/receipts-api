@@ -1,10 +1,14 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"image"
+	_ "image/jpeg" // register decoders for validateImage
+	_ "image/png"
 	"io"
 	"log/slog"
 	"net/http"
@@ -22,6 +26,25 @@ const DefaultMaxUploadBytes = 20 << 20
 // allowedImageTypes: formats the vision provider accepts (xAI: jpeg, png).
 var allowedImageTypes = map[string]string{"image/jpeg": ".jpg", "image/png": ".png"}
 
+// maxImagePixels bounds decoded image size (decompression-bomb guard); ~50 MP.
+const maxImagePixels = 50_000_000
+
+// validateImage fully decodes the image so truncated or corrupt JPEG/PNG files are rejected
+// before anything is written or sent to a provider.
+func validateImage(data []byte) error {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return errors.New("Corrupt or unreadable image")
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > maxImagePixels {
+		return errors.New("Image dimensions out of range")
+	}
+	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
+		return errors.New("Corrupt or truncated image")
+	}
+	return nil
+}
+
 // Enqueuer schedules extraction for a receipt.
 type Enqueuer interface{ Enqueue(receiptID int) bool }
 
@@ -29,6 +52,7 @@ type Enqueuer interface{ Enqueue(receiptID int) bool }
 type UploadStore interface {
 	FindReceiptBySHA(ctx context.Context, sha []byte) (receiptID int, docID int64, status string, found bool, err error)
 	CreateUpload(ctx context.Context, doc *models.SourceDocument, receipt *models.Receipt) error
+	MemberExists(ctx context.Context, id int64) (bool, error)
 }
 
 // ReceiptLookup is used by the re-extract endpoint.
@@ -135,6 +159,29 @@ func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Reques
 		h.respond(w, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
+	if err := validateImage(data); err != nil {
+		h.respond(w, http.StatusBadRequest, err.Error(), nil)
+		return
+	}
+	// validate references before writing anything to disk
+	for _, ref := range []struct {
+		field string
+		id    *int64
+	}{{"uploaded_by_id", uploader}, {"member_id", member}} {
+		if ref.id == nil {
+			continue
+		}
+		ok, err := h.Store.MemberExists(ctx, *ref.id)
+		if err != nil {
+			h.Logger.Error("member lookup failed", "error", err)
+			h.respond(w, http.StatusInternalServerError, "Failed to store upload", nil)
+			return
+		}
+		if !ok {
+			h.respond(w, http.StatusBadRequest, "Unknown "+ref.field, nil)
+			return
+		}
+	}
 
 	sum := sha256.Sum256(data)
 	if rid, did, status, found, err := h.Store.FindReceiptBySHA(ctx, sum[:]); err != nil {
@@ -149,7 +196,8 @@ func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Reques
 
 	hexSum := hex.EncodeToString(sum[:])
 	key := "receipts/" + hexSum[:2] + "/" + hexSum + ext
-	if err := h.Blobs.Put(ctx, key, data); err != nil {
+	created, err := h.Blobs.Put(ctx, key, data)
+	if err != nil {
 		h.Logger.Error("blob put failed", "error", err)
 		h.respond(w, http.StatusInternalServerError, "Failed to store upload", nil)
 		return
@@ -162,6 +210,13 @@ func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Reques
 			h.respond(w, http.StatusOK, "Duplicate image; existing receipt returned",
 				models.UploadResult{ReceiptID: rid, SourceDocumentID: did, Status: status, Duplicate: true})
 			return
+		}
+		// Remove the file only if this request created it; an existing blob (same sha256)
+		// may belong to another, successful upload.
+		if created {
+			if e := h.Blobs.Delete(ctx, key); e != nil {
+				h.Logger.Warn("orphan blob cleanup failed", "key", key, "error", e)
+			}
 		}
 		h.Logger.Error("create upload failed", "error", err)
 		h.respond(w, http.StatusInternalServerError, "Failed to store upload", nil)

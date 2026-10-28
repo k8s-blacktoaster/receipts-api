@@ -7,6 +7,7 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	jpegenc "image/jpeg"
 	"image/png"
 	"io"
 	"log/slog"
@@ -55,6 +56,11 @@ func (f *fakeUploadStore) CreateUpload(_ context.Context, d *models.SourceDocume
 		return errors.New("upload must create a photo receipt with status uploaded")
 	}
 	return nil
+}
+
+// members 1..4 exist
+func (f *fakeUploadStore) MemberExists(_ context.Context, id int64) (bool, error) {
+	return id >= 1 && id <= 4, nil
 }
 
 type fakeQueue struct{ ids []int }
@@ -231,5 +237,72 @@ func TestReextract(t *testing.T) {
 	h.Queue = nil
 	if c := call("/api/v1/receipts/9/extract"); c != 503 {
 		t.Fatalf("disabled: %d", c)
+	}
+}
+
+func TestUploadUnknownMemberRejectedBeforeWrite(t *testing.T) {
+	for _, field := range []string{"member_id", "uploaded_by_id"} {
+		h, st, _, blobs := newUploadHandler()
+		body, ct := multipartBody(t, "image", pngBytes(t, 9), map[string]string{field: "999"})
+		rec := do(h.UploadReceiptPhoto, body, ct)
+		if rec.Code != 400 || !strings.Contains(rec.Body.String(), "Unknown "+field) {
+			t.Fatalf("%s: %d %s", field, rec.Code, rec.Body)
+		}
+		if len(blobs.M) != 0 || len(st.docs) != 0 {
+			t.Fatalf("%s: wrote %d blobs / %d docs before validating", field, len(blobs.M), len(st.docs))
+		}
+	}
+	h, _, _, _ := newUploadHandler()
+	body, ct := multipartBody(t, "image", pngBytes(t, 9), map[string]string{"member_id": "1", "uploaded_by_id": "2"})
+	if rec := do(h.UploadReceiptPhoto, body, ct); rec.Code != 202 {
+		t.Fatalf("known members: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestUploadTruncatedImageRejected(t *testing.T) {
+	full := pngBytes(t, 3)
+	var jb bytes.Buffer
+	if err := jpegenc.Encode(&jb, image.NewRGBA(image.Rect(0, 0, 32, 32)), nil); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string][]byte{
+		"png":  full[:len(full)-20],
+		"jpeg": jb.Bytes()[:jb.Len()/2],
+	} {
+		h, st, _, blobs := newUploadHandler()
+		body, ct := multipartBody(t, "image", data, nil)
+		rec := do(h.UploadReceiptPhoto, body, ct)
+		if rec.Code != 400 {
+			t.Fatalf("truncated %s: %d %s", name, rec.Code, rec.Body)
+		}
+		if len(blobs.M) != 0 || len(st.docs) != 0 {
+			t.Fatalf("truncated %s was stored", name)
+		}
+	}
+}
+
+func TestUploadCleansUpBlobOnDBError(t *testing.T) {
+	h, st, _, blobs := newUploadHandler()
+	st.err = errors.New("db down")
+	body, ct := multipartBody(t, "image", pngBytes(t, 4), nil)
+	if rec := do(h.UploadReceiptPhoto, body, ct); rec.Code != 500 {
+		t.Fatalf("want 500, got %d", rec.Code)
+	}
+	if len(blobs.M) != 0 {
+		t.Fatalf("orphan blob left behind: %d", len(blobs.M))
+	}
+	// a pre-existing blob (same content, owned by another upload) is never deleted
+	sumKey := ""
+	st.err = nil
+	body, ct = multipartBody(t, "image", pngBytes(t, 4), nil)
+	do(h.UploadReceiptPhoto, body, ct)
+	for k := range blobs.M {
+		sumKey = k
+	}
+	st.err, st.bySHA = errors.New("db down"), nil
+	body, ct = multipartBody(t, "image", pngBytes(t, 4), nil)
+	do(h.UploadReceiptPhoto, body, ct)
+	if _, ok := blobs.M[sumKey]; !ok {
+		t.Fatal("deleted a blob this request did not create")
 	}
 }
