@@ -2,6 +2,7 @@ FROM mcr.microsoft.com/devcontainers/go:1-1.24-bullseye
 
 RUN apt-get update && apt-get install -y \
     postgresql-client \
+    libheif-examples \
     make \
     curl \
     && rm -rf /var/lib/apt/lists/*
