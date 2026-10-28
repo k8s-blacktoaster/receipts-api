@@ -85,4 +85,4 @@
 - Tests: TestNormalizeMerchantName (table), TestMerchantNameSQLGoParity, TestMerchantBackfillMerge
   (Costco/COSTCO/costco + trader  joes/Trader Joe's/TRADER   JOES -> costco, trader_joes, with
   store + alias dedupe), TestMerchantNameUniqueAndCheck, TestMerchantResolveByKey. Obsolete naming tests removed.
-- 15/15 repository integration tests pass; pg_dump -s identical after down 2 / up.
+- 16/16 repository integration tests pass (incl. TestMerchantTrigramIndexAndSimilarity); pg_dump -s identical after down 2 / up.

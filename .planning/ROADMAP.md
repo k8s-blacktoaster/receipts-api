@@ -43,7 +43,7 @@ assets embedded in the Go binary (`embed`), served by the same deployment, VPN-o
 
 ### Phase 4: Normalization & review
 **Depends on**: Phase 2 (UI from Phase 3 consumes it)
-**Requirements**: NORM-01, NORM-02
+**Requirements**: NORM-01..NORM-03 (NORM-03: colliding aliases kept with item_number cleared, not dropped)
 **Success Criteria**: >=90% of lines with an item number/UPC auto-map; corrections create merchant-scoped aliases reused next time (pg_trgm fuzzy indexes land here)
 
 ### Phase 5: MCP server
@@ -55,7 +55,7 @@ trigram index from migration 006.
 
 ### Phase 6: Kubernetes deploy & backups
 **Depends on**: Phase 2 (can run in parallel with 3-5)
-**Requirements**: OPS-01, OPS-02
+**Requirements**: OPS-01..OPS-03 (OPS-03: UTF-8 locale/collation, or explicit collation in merchant_name_key)
 
 ### Phase 7: Legacy column cleanup (later)
 **Depends on**: Phases 2-4 (all readers on merchant_id/store_id)

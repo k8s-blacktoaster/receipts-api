@@ -24,6 +24,7 @@
 ### Normalization
 - [ ] **NORM-01**: Line items map to canonical products via merchant-scoped item number / UPC, then alias, then fuzzy/LLM suggestion
 - [ ] **NORM-02**: Unmapped/low-confidence lines appear in the review queue and are fixable
+- [ ] **NORM-03**: When merchants merge and aliases collide on (merchant, item_number), keep the colliding alias with item_number cleared (do not drop it); revisit the 006 backfill behaviour here
 ### MCP
 - [ ] **MCP-01**: Streamable HTTP MCP endpoint with read-only tools (search, where-bought, spend, price history)
 - [ ] **MCP-02**: Every answer returns receipt ids/dates so results are verifiable
@@ -34,6 +35,7 @@
 ### Deploy
 - [ ] **OPS-01**: Manifests for api(+UI), worker, mcp, Postgres (CNPG), object store, secrets
 - [ ] **OPS-02**: Nightly DB backup + image bucket backup, tested restore
+- [ ] **OPS-03**: Postgres must use a UTF-8 locale/collation (not "C"), or merchant_name_key() must use an explicit collation (e.g. ICU "und-x-icu"), so SQL lower() matches Go for non-ASCII merchant names
 
 ## v2 Requirements
 - Email-in ingestion, in-cluster model, budgets/alerts
