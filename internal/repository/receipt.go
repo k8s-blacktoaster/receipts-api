@@ -100,10 +100,14 @@ func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt, keep
 	}
 	var err error
 	if !(keepMerchant && r.MerchantID != 0) {
-		err = q.QueryRowContext(ctx, `
+		// A merged-away name resolves to the surviving merchant.
+		err = q.QueryRowContext(ctx, `SELECT merchant_id FROM merchant_name_redirects WHERE name_key = $1`, key).Scan(&r.MerchantID)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = q.QueryRowContext(ctx, `
 		INSERT INTO merchants (name, category) VALUES ($1, $2)
 		ON CONFLICT (name) DO UPDATE SET category = COALESCE(merchants.category, EXCLUDED.category)
 		RETURNING id`, key, nullStr(r.StoreCategory)).Scan(&r.MerchantID)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to resolve merchant: %w", err)
 		}

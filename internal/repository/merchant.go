@@ -104,6 +104,21 @@ func (r *merchantRepo) Rename(ctx context.Context, id int64, newName string) (*m
 	if cur.Name == key {
 		return cur, nil
 	}
+	var redirect int64
+	switch e := r.db.QueryRowContext(ctx, `SELECT merchant_id FROM merchant_name_redirects WHERE name_key = $1`, key).Scan(&redirect); {
+	case e == nil && redirect != id:
+		ex, gerr := r.GetByID(ctx, redirect)
+		if gerr != nil {
+			return nil, ErrMerchantNameTaken
+		}
+		return nil, &MerchantConflict{Existing: *ex}
+	case e == nil:
+		if _, err := r.db.ExecContext(ctx, `DELETE FROM merchant_name_redirects WHERE name_key = $1`, key); err != nil {
+			return nil, fmt.Errorf("failed to clear redirect: %w", err)
+		}
+	case !errors.Is(e, sql.ErrNoRows):
+		return nil, fmt.Errorf("failed to check redirects: %w", e)
+	}
 	_, err = r.db.ExecContext(ctx, `UPDATE merchants SET name = $2, updated_at = now() WHERE id = $1`, id, key)
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && pqErr.Code == "23505" {
@@ -186,6 +201,15 @@ func (r *merchantRepo) Merge(ctx context.Context, from, into int64) (*MergeResul
 		return nil, err
 	}
 	if res.AliasesMoved, err = exec(`UPDATE product_aliases SET merchant_id = $2 WHERE merchant_id = $1`, from, into); err != nil {
+		return nil, err
+	}
+	// Merges stick: from's name (and any names already redirected to it) now resolve to into.
+	if _, err := exec(`UPDATE merchant_name_redirects SET merchant_id = $2 WHERE merchant_id = $1`, from, into); err != nil {
+		return nil, err
+	}
+	if _, err := exec(`INSERT INTO merchant_name_redirects (name_key, merchant_id)
+		SELECT name, $2 FROM merchants WHERE id = $1
+		ON CONFLICT (name_key) DO UPDATE SET merchant_id = EXCLUDED.merchant_id`, from, into); err != nil {
 		return nil, err
 	}
 	if res.Receipts, err = exec(`UPDATE receipts SET merchant_id = $2, updated_at = now() WHERE merchant_id = $1`, from, into); err != nil {

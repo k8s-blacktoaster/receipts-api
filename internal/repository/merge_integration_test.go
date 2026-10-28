@@ -89,3 +89,47 @@ func TestMerchantMerge(t *testing.T) {
 		t.Fatalf("post-merge mapping: %+v", got.Items)
 	}
 }
+
+// Merges stick: the merged-away name (and names already redirected to it) resolve to the
+// survivor on later receipts; renaming another merchant onto a redirected name is a conflict.
+func TestMerchantMergeRedirects(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	receipts, merchants := NewReceiptRepository(db), NewMerchantRepository(db)
+	mk := func(name string) *models.Receipt {
+		r := &models.Receipt{StoreName: name, Date: "2026-04-01", Source: models.SourceManual,
+			Items: []models.ReceiptItem{{Name: "x", Quantity: 1}}}
+		if err := receipts.Create(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	lucky, luckys, survivor, other := mk("Lucky"), mk("Luckys"), mk("Lucky Supermarkets"), mk("Other")
+	if _, err := merchants.Merge(ctx, lucky.MerchantID, luckys.MerchantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := merchants.Merge(ctx, luckys.MerchantID, survivor.MerchantID); err != nil { // chain
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Lucky", "LUCKY", "Luckys"} {
+		if r := mk(name); r.MerchantID != survivor.MerchantID {
+			t.Errorf("%q -> merchant %d, want survivor %d", name, r.MerchantID, survivor.MerchantID)
+		}
+	}
+	var n int
+	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM merchants WHERE name IN ('lucky','luckys')`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("merged-away merchants re-created: %d", n)
+	}
+	var conflict *MerchantConflict
+	if _, err := merchants.Rename(ctx, other.MerchantID, "Lucky"); !errors.As(err, &conflict) || conflict.Existing.ID != survivor.MerchantID {
+		t.Fatalf("rename onto redirected name: %v", err)
+	}
+	// The survivor may take the redirected name back; the redirect goes away.
+	if m, err := merchants.Rename(ctx, survivor.MerchantID, "Lucky"); err != nil || m.Name != "lucky" {
+		t.Fatalf("survivor rename: %v %v", m, err)
+	}
+	if r := mk("Lucky"); r.MerchantID != survivor.MerchantID {
+		t.Fatalf("after rename: %d", r.MerchantID)
+	}
+}
