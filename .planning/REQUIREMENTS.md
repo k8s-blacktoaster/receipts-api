@@ -20,7 +20,7 @@
 - [ ] **UI-01**: Mobile-friendly web UI: camera capture on the phone, multiple photos per receipt, upload status
 - [ ] **UI-02**: Receipt list showing parse/review status; simple edit/review of parsed line items
 - [ ] **UI-03**: Served from the same deployment (static assets embedded in the Go binary), VPN-only. No chat or bot in the UI.
-- [ ] **UI-04** (phase 3): Manual merchant rename in the web UI; a rename sets merchants.name_is_derived = false so it is never auto-changed.
+- [ ] **UI-04** (phase 3): Manual merchant rename in the web UI is a simple edit; the new name is re-normalized with NormalizeMerchantName (merging into an existing merchant if the key already exists).
 ### Normalization
 - [ ] **NORM-01**: Line items map to canonical products via merchant-scoped item number / UPC, then alias, then fuzzy/LLM suggestion
 - [ ] **NORM-02**: Unmapped/low-confidence lines appear in the review queue and are fixable
@@ -49,9 +49,13 @@
 - A receipt's store must belong to its merchant (composite FK). Merchants are unique on
   lower(btrim(name)); stores without a number are unique on (merchant_id, lower(address)).
 
-## Merchant display names (006, final for phase 1)
-- merchants.name_is_derived: true only for machine-chosen names (006 initcap fallback, or an
-  all-lower / ALL-CAPS name). Only derived names are upgraded automatically, and only by a
-  mixed-case spelling, which clears the flag. Non-derived names change only via manual rename (UI-04).
-- Accepted minor: in the 006 backfill the most frequent mixed-case spelling wins, even if a
-  less frequent one is "more correct".
+## Merchant names (006)
+- One stored merchant name: the normalized key from models.NormalizeMerchantName, used for both
+  matching and display (e.g. "Trader Joe's" -> trader_joes, "Barnes & Noble" -> barnes_and_noble).
+- Rule: lowercase; '&' -> ' and ' (padded, so "H&M" -> h_and_m, "AT&T" -> at_and_t); drop
+  apostrophes and other listed punctuation; runs of whitespace/'-'/'_' -> '_'; strip '_'.
+  Letters/digits of any script are kept ("Café Rio" -> café_rio).
+- SQL merchant_name_key() (006) mirrors it with explicit character lists; a parity test guards it.
+  Caveat: SQL lower() of non-ASCII uppercase depends on the DB collation; use a UTF-8 (non-"C")
+  collation in production so legacy backfills of e.g. "ÉCOLE" match Go. New writes use Go.
+- Names that normalize to '' are rejected on write; the backfill renames them unknown_<id>.

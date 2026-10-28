@@ -74,3 +74,15 @@
 - Tests: TestMixedCaseStoredNameNeverOverwritten (QA repro), TestNewMerchantDerivedFlag,
   TestMerchantBackfillDisplayName (asserts flags), TestMerchantInitcapUpgradeNoFlipFlop (flag-based setup).
 - 20/20 repository integration tests pass; pg_dump -s identical after down 2 / up.
+
+## 006 simplified (Jack, 2026-10-27; edited in place, unreleased - supersedes the display-name iterations above)
+- One stored merchant name = normalized key (models.NormalizeMerchantName / SQL merchant_name_key()).
+  name_is_derived, display-name voting, initcap and all upgrade logic removed.
+- '&' -> ' and ' padded: "H&M" -> h_and_m, "AT&T" -> at_and_t, "Barnes & Noble" -> barnes_and_noble.
+- Backfill merges duplicate merchants, deduping their stores (store number / address) and aliases
+  (alias text / item number) and moving receipts. Unique index on merchants.name; CHECK
+  name = merchant_name_key(name). 006 down is lossy (no un-merge, names stay normalized).
+- Tests: TestNormalizeMerchantName (table), TestMerchantNameSQLGoParity, TestMerchantBackfillMerge
+  (Costco/COSTCO/costco + trader  joes/Trader Joe's/TRADER   JOES -> costco, trader_joes, with
+  store + alias dedupe), TestMerchantNameUniqueAndCheck, TestMerchantResolveByKey. Obsolete naming tests removed.
+- 15/15 repository integration tests pass; pg_dump -s identical after down 2 / up.
