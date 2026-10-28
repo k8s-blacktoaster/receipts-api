@@ -96,6 +96,8 @@ func TestMerchantBackfillMerge(t *testing.T) {
 		{`INSERT INTO stores (id, merchant_id, store_number) VALUES (701, $1, '55'), (702, $2, '55'), (703, $2, '99')`, []any{tjA, tjB}},
 		{`INSERT INTO products (id, canonical_name) VALUES (601, 'Bananas')`, nil},
 		{`INSERT INTO product_aliases (product_id, merchant_id, alias_text) VALUES (601, $1, 'BANANAS'), (601, $2, 'bananas'), (601, $2, 'ORG BANANAS')`, []any{tjA, tjB}},
+		// NORM-03: same item number, different text -> the later one is kept with item_number cleared
+		{`INSERT INTO product_aliases (product_id, merchant_id, alias_text, item_number) VALUES (601, $1, 'BANANA BUNCH', '4011'), (601, $2, 'BANANAS LOOSE', '4011')`, []any{tjA, tjB}},
 		{`UPDATE receipts SET store_id = 702 WHERE id = (SELECT min(id) FROM receipts WHERE merchant_id = $1)`, []any{tjB}},
 	}
 	for _, st := range setup {
@@ -128,7 +130,13 @@ func TestMerchantBackfillMerge(t *testing.T) {
 	db.QueryRow(`SELECT count(*) FROM product_aliases WHERE merchant_id = $1`, keep).Scan(&aliases)
 	db.QueryRow(`SELECT count(*) FROM receipts WHERE merchant_id IS NULL OR merchant_id NOT IN (SELECT id FROM merchants)`).Scan(&orphan)
 	db.QueryRow(`SELECT count(*) FROM receipts WHERE store_id = 702`).Scan(&onDupStore)
-	if tjReceipts != 3 || stores != 2 || aliases != 2 || orphan != 0 || onDupStore != 0 {
+	var cleared, numbered int
+	db.QueryRow(`SELECT count(*) FROM product_aliases WHERE alias_text = 'BANANAS LOOSE' AND item_number IS NULL`).Scan(&cleared)
+	db.QueryRow(`SELECT count(*) FROM product_aliases WHERE alias_text = 'BANANA BUNCH' AND item_number = '4011'`).Scan(&numbered)
+	if cleared != 1 || numbered != 1 {
+		t.Fatalf("item-number collision: cleared=%d numbered=%d", cleared, numbered)
+	}
+	if tjReceipts != 3 || stores != 2 || aliases != 4 || orphan != 0 || onDupStore != 0 {
 		t.Fatalf("merge: receipts=%d stores=%d aliases=%d orphan=%d onDupStore=%d", tjReceipts, stores, aliases, orphan, onDupStore)
 	}
 }

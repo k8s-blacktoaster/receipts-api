@@ -38,15 +38,22 @@ UPDATE stores s SET merchant_id = sm.keep_merchant FROM _store_map sm
 DELETE FROM _merchant_map WHERE id = keep_id;
 UPDATE receipts r SET merchant_id = m.keep_id FROM _merchant_map m WHERE r.merchant_id = m.id;
 UPDATE receipts r SET store_id = x.keep_store FROM _receipt_store x WHERE x.receipt_id = r.id;
--- aliases of a merged group: keep the oldest per lower(alias_text) and per item_number
+-- aliases of a merged group: keep the oldest per lower(alias_text) (that key cannot hold two
+-- rows); an alias whose item_number collides is KEPT with item_number cleared (NORM-03), so its
+-- printed text still maps. Same rule as MerchantRepository.Merge.
 DELETE FROM product_aliases a USING (
     SELECT a.id,
-           row_number() OVER (PARTITION BY COALESCE(m.keep_id, a.merchant_id), lower(a.alias_text) ORDER BY a.id) AS rn_alias,
-           CASE WHEN a.item_number IS NULL THEN 1 ELSE
-           row_number() OVER (PARTITION BY COALESCE(m.keep_id, a.merchant_id), a.item_number ORDER BY a.id) END AS rn_item
+           row_number() OVER (PARTITION BY COALESCE(m.keep_id, a.merchant_id), lower(a.alias_text) ORDER BY a.id) AS rn_alias
     FROM product_aliases a LEFT JOIN _merchant_map m ON m.id = a.merchant_id
     WHERE a.merchant_id IN (SELECT id FROM _merchant_map) OR a.merchant_id IN (SELECT keep_id FROM _merchant_map)
-) d WHERE d.id = a.id AND (d.rn_alias > 1 OR d.rn_item > 1);
+) d WHERE d.id = a.id AND d.rn_alias > 1;
+UPDATE product_aliases a SET item_number = NULL FROM (
+    SELECT a.id,
+           row_number() OVER (PARTITION BY COALESCE(m.keep_id, a.merchant_id), a.item_number ORDER BY a.id) AS rn_item
+    FROM product_aliases a LEFT JOIN _merchant_map m ON m.id = a.merchant_id
+    WHERE a.item_number IS NOT NULL
+      AND (a.merchant_id IN (SELECT id FROM _merchant_map) OR a.merchant_id IN (SELECT keep_id FROM _merchant_map))
+) d WHERE d.id = a.id AND d.rn_item > 1;
 UPDATE product_aliases a SET merchant_id = m.keep_id FROM _merchant_map m WHERE a.merchant_id = m.id;
 DELETE FROM merchants WHERE id IN (SELECT id FROM _merchant_map);
 
