@@ -163,9 +163,7 @@ func TestF7ViewsUseMerchantStore(t *testing.T) {
 // F1/F6 backfill: 005 merges pre-existing whitespace-variant merchants and duplicate stores.
 func TestF1F6BackfillMerges(t *testing.T) {
 	db := testDB(t)
-	if err := database.RollbackMigrations(db, "../../migrations", 2); err != nil { // to 004
-		t.Fatal(err)
-	}
+	migrateTo(t, db, 4)
 	for _, q := range []string{
 		`INSERT INTO merchants (id, name) VALUES (901, 'Sprouts'), (902, ' sprouts ')`,
 		`INSERT INTO stores (id, merchant_id, address) VALUES (911, 901, '1 Main'), (912, 902, '1 main ')`,

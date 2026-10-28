@@ -44,9 +44,7 @@ func TestMerchantInternalWhitespaceAndCasingUpgrade(t *testing.T) {
 // A1/A2 backfill: 006 merges internal-whitespace variants and picks the display name.
 func TestMerchantBackfillDisplayName(t *testing.T) {
 	db := testDB(t)
-	if err := database.RollbackMigrations(db, "../../migrations", 1); err != nil {
-		t.Fatal(err)
-	}
+	migrateTo(t, db, 5)
 	for _, q := range []string{
 		// simulate legacy duplicates that pre-date the unique key
 		`DROP INDEX merchants_name_uniq`,

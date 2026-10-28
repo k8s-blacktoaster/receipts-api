@@ -38,6 +38,17 @@ func testDB(t *testing.T) *database.DB {
 	return db
 }
 
+// migrateTo resets the schema and applies exactly the first n migrations.
+func migrateTo(t *testing.T, db *database.DB, n int) {
+	t.Helper()
+	if err := database.RollbackMigrations(db, "../../migrations", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RunMigrationsN(db, "../../migrations", n); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func ptr[T any](v T) *T { return &v }
 
 func TestMigrationsUpDownUp(t *testing.T) {
