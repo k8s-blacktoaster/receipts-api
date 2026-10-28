@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"receipts-db/internal/database"
@@ -43,9 +44,15 @@ type txExec interface {
 // resolveMerchantStore finds or creates the merchant (by case-insensitive name) and,
 // when a store number or address is given, the store location.
 func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt) error {
+	r.StoreName = strings.TrimSpace(r.StoreName)
+	r.StoreNumber = strings.TrimSpace(r.StoreNumber)
+	r.StoreAddress = strings.TrimSpace(r.StoreAddress)
+	if r.StoreName == "" {
+		return errors.New("store name is required")
+	}
 	err := q.QueryRowContext(ctx, `
 		INSERT INTO merchants (name, category) VALUES ($1, $2)
-		ON CONFLICT ((lower(name))) DO UPDATE SET category = COALESCE(merchants.category, EXCLUDED.category)
+		ON CONFLICT ((lower(btrim(name)))) DO UPDATE SET category = COALESCE(merchants.category, EXCLUDED.category)
 		RETURNING id`, r.StoreName, nullStr(r.StoreCategory)).Scan(&r.MerchantID)
 	if err != nil {
 		return fmt.Errorf("failed to resolve merchant: %w", err)
@@ -64,12 +71,10 @@ func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt) erro
 			RETURNING id`, r.MerchantID, r.StoreNumber, nullStr(r.StoreAddress), nullStr(r.StorePhone)).Scan(&id)
 	} else {
 		err = q.QueryRowContext(ctx, `
-			SELECT id FROM stores WHERE merchant_id = $1 AND store_number IS NULL AND address = $2 ORDER BY id LIMIT 1`,
-			r.MerchantID, r.StoreAddress).Scan(&id)
-		if errors.Is(err, sql.ErrNoRows) {
-			err = q.QueryRowContext(ctx, `INSERT INTO stores (merchant_id, address, phone) VALUES ($1, $2, $3) RETURNING id`,
-				r.MerchantID, r.StoreAddress, nullStr(r.StorePhone)).Scan(&id)
-		}
+			INSERT INTO stores (merchant_id, address, phone) VALUES ($1, $2, $3)
+			ON CONFLICT (merchant_id, lower(address)) WHERE store_number IS NULL AND address IS NOT NULL
+			DO UPDATE SET phone = COALESCE(EXCLUDED.phone, stores.phone)
+			RETURNING id`, r.MerchantID, r.StoreAddress, nullStr(r.StorePhone)).Scan(&id)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to resolve store: %w", err)
