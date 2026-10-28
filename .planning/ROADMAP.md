@@ -57,6 +57,7 @@ VPN-only, no chat. Multi-photo receipts deferred (one photo per upload).
 **Notes**: merchant-name inputs are normalized with the shared Go function (MCP-04); list_merchants
 (MCP-05); pg_trgm fuzzy fallback for nicknames like "TJ's" (MCP-06) uses the merchants.name GIN
 trigram index from migration 006.
+**Plans**: 05-01 (phases/05-mcp-server)
 
 ### Phase 6: Kubernetes deploy & backups
 **Depends on**: Phase 2 (can run in parallel with 3-5)
