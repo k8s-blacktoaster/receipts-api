@@ -1,0 +1,12 @@
+{{define "content"}}
+<p class="hint">Names are stored normalized (lowercase, punctuation dropped, spaces become _). Renaming to a name another merchant already has is refused (no merge yet).</p>
+<ul class="merchants">
+{{range .Merchants}}
+  <li><form method="post" action="/merchants/{{.ID}}/rename" class="rename">
+    <input name="name" value="{{.Name}}" aria-label="Merchant name" required>
+    <span class="meta">{{.ReceiptCount}} receipts</span>
+    <button class="btn">Rename</button>
+  </form></li>
+{{else}}<li class="empty">No merchants yet.</li>{{end}}
+</ul>
+{{end}}

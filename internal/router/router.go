@@ -15,7 +15,10 @@ import (
 	_ "receipts-db/docs" // This is required for Swagger
 )
 
-func New(receiptHandler *handlers.ReceiptHandler, uploadHandler *handlers.UploadHandler, logger *slog.Logger) http.Handler {
+// UI registers the web pages (internal/web); nil disables the UI.
+type UI interface{ Register(r chi.Router) }
+
+func New(receiptHandler *handlers.ReceiptHandler, uploadHandler *handlers.UploadHandler, ui UI, logger *slog.Logger) http.Handler {
 	r := chi.NewRouter()
 
 	// Middleware stack
@@ -44,6 +47,10 @@ func New(receiptHandler *handlers.ReceiptHandler, uploadHandler *handlers.Upload
 
 	if uploadHandler != nil {
 		r.Post("/api/v1/uploads", uploadHandler.UploadReceiptPhoto) // POST /api/v1/uploads (multipart)
+	}
+
+	if ui != nil {
+		ui.Register(r)
 	}
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {

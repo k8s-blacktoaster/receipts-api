@@ -35,6 +35,7 @@ import (
 	"receipts-db/internal/repository"
 	"receipts-db/internal/router"
 	"receipts-db/internal/storage"
+	"receipts-db/internal/web"
 )
 
 func main() {
@@ -130,7 +131,17 @@ func main() {
 		uploadHandler.Queue = queue
 	}
 
-	handler := router.New(receiptHandler, uploadHandler, logger)
+	ui, err := web.New(web.UI{Receipts: receiptRepo, Members: repository.NewMemberRepository(db),
+		Merchants: repository.NewMerchantRepository(db), Docs: docRepo, Blobs: blobs, Uploads: uploadHandler,
+		MaxBytes: cfg.MaxUploadBytes, Logger: logger})
+	if err != nil {
+		logger.Error("web UI templates", "error", err)
+		os.Exit(1)
+	}
+	if queue != nil {
+		ui.Queue = queue
+	}
+	handler := router.New(receiptHandler, uploadHandler, ui, logger)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),

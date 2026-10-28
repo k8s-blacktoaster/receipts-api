@@ -1,0 +1,28 @@
+{{define "content"}}
+<section class="card upload">
+  <form id="upload" action="/upload" method="post" enctype="multipart/form-data">
+    {{/* Explicit JPEG/PNG list: iOS Safari then transcodes HEIC photos to JPEG on upload.
+         app.js converts any remaining HEIC in the browser where it can; the server converts
+         the rest (heif-dec) or returns 415 with guidance. */}}
+    <label class="btn primary">Take photo
+      <input type="file" name="image" accept="image/jpeg,image/png" capture="environment" hidden data-autosubmit>
+    </label>
+    <label class="btn">Choose photo
+      <input type="file" name="image" accept="image/jpeg,image/png,image/heic,image/heif,.heic,.heif" hidden data-autosubmit>
+    </label>
+    <noscript><button type="submit" class="btn">Upload</button></noscript>
+    <p class="hint">{{if not .Member}}Tip: <a href="/member?next=/receipts">pick who you are</a> first. {{end}}{{if not .Extract}}Extraction is off on this server: photos stay "uploaded".{{end}}</p>
+  </form>
+</section>
+<ul class="receipts">
+{{range .Receipts}}
+  <li><a href="/receipts/{{.ID}}">
+    <span class="badge s-{{.Status}}">{{statusLabel .Status}}</span>
+    <span class="name">{{if .StoreName}}{{.StoreName}}{{else}}Receipt #{{.ID}}{{end}}</span>
+    <span class="meta">{{if .Date}}{{.Date}}{{else}}date pending{{end}} · ${{money .TotalCents}}</span>
+  </a></li>
+{{else}}
+  <li class="empty">No receipts yet. Take a photo to start.</li>
+{{end}}
+</ul>
+{{end}}
