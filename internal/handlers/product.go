@@ -158,14 +158,8 @@ func (h *ProductHandler) MapItem(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := h.Products.CreateProduct(r.Context(), p); err != nil {
-			h.Logger.Error("create product failed", "error", err)
-			h.fail(w, http.StatusInternalServerError, "Failed to create product")
-			return
-		}
-		req.ProductID = p.ID
 	}
-	res, err := h.Products.MapItem(r.Context(), id, req.ProductID)
+	res, err := h.Products.MapItem(r.Context(), id, req.ProductID, req.NewProduct)
 	if code, msg := MapItemError(err); code != 0 {
 		if code == http.StatusInternalServerError {
 			h.Logger.Error("map item failed", "error", err, "item_id", id)

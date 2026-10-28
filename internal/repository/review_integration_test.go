@@ -33,7 +33,7 @@ func TestReviewQueueMapLearnsAliasAndReusesIt(t *testing.T) {
 	if err := products.CreateProduct(ctx, banana); err != nil {
 		t.Fatal(err)
 	}
-	res, err := products.MapItem(ctx, int64(r1.Items[0].ID), banana.ID)
+	res, err := products.MapItem(ctx, int64(r1.Items[0].ID), banana.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestReviewQueueMapLearnsAliasAndReusesIt(t *testing.T) {
 	// Remap the same text to another product: alias moves, no unique-key violation.
 	plantain := &models.Product{CanonicalName: "Plantains"}
 	_ = products.CreateProduct(ctx, plantain)
-	if _, err := products.MapItem(ctx, int64(r1.Items[0].ID), plantain.ID); err != nil {
+	if _, err := products.MapItem(ctx, int64(r1.Items[0].ID), plantain.ID, nil); err != nil {
 		t.Fatal(err)
 	}
 	var n int
@@ -82,17 +82,30 @@ func TestReviewQueueMapLearnsAliasAndReusesIt(t *testing.T) {
 	}
 
 	// Errors.
-	if _, err := products.MapItem(ctx, 999999, banana.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := products.MapItem(ctx, 999999, banana.ID, nil); !errors.Is(err, ErrNotFound) {
 		t.Errorf("unknown item: %v", err)
 	}
-	if _, err := products.MapItem(ctx, int64(r1.Items[1].ID), 999999); !errors.Is(err, ErrProductNotFound) {
+	if _, err := products.MapItem(ctx, int64(r1.Items[1].ID), 999999, nil); !errors.Is(err, ErrProductNotFound) {
 		t.Errorf("unknown product: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE receipts SET status = 'parsing' WHERE id = $1`, r1.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := products.MapItem(ctx, int64(r1.Items[1].ID), banana.ID); !errors.Is(err, ErrReceiptBusy) {
+	if _, err := products.MapItem(ctx, int64(r1.Items[1].ID), banana.ID, nil); !errors.Is(err, ErrReceiptBusy) {
 		t.Errorf("parsing receipt: %v", err)
+	}
+	// A refused map with a new product creates nothing (no orphan products on 404/409).
+	var before, after int
+	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM products`).Scan(&before)
+	if _, err := products.MapItem(ctx, int64(r1.Items[1].ID), 0, &models.Product{CanonicalName: "Orphan?"}); !errors.Is(err, ErrReceiptBusy) {
+		t.Errorf("busy + new product: %v", err)
+	}
+	if _, err := products.MapItem(ctx, 999999, 0, &models.Product{CanonicalName: "Orphan?"}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing + new product: %v", err)
+	}
+	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM products`).Scan(&after)
+	if after != before {
+		t.Errorf("orphan products created: %d -> %d", before, after)
 	}
 	if _, total, _ = products.ListReviewItems(ctx, 50, 0); total != 0 {
 		t.Errorf("parsing receipt still queued: %d", total)

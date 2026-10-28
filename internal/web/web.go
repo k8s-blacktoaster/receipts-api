@@ -59,7 +59,7 @@ type Products interface {
 	ListReviewItems(ctx context.Context, limit, offset int) ([]models.ReviewItem, int, error)
 	SearchProducts(ctx context.Context, q string, limit int) ([]models.Product, error)
 	CreateProduct(ctx context.Context, p *models.Product) error
-	MapItem(ctx context.Context, itemID, productID int64) (*models.MapResult, error)
+	MapItem(ctx context.Context, itemID, productID int64, newProduct *models.Product) (*models.MapResult, error)
 }
 
 type Docs interface {
@@ -629,24 +629,19 @@ func (u *UI) mapItem(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	pid, _ := strconv.ParseInt(r.PostForm.Get("product_id"), 10, 64)
 	newName := strings.TrimSpace(r.PostForm.Get("new_name"))
+	var np *models.Product
 	switch {
 	case newName != "" && pid == 0:
-		p := &models.Product{CanonicalName: newName}
-		if err := p.Validate(); err != nil {
+		np = &models.Product{CanonicalName: newName}
+		if err := np.Validate(); err != nil {
 			u.reviewWith(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
-		if err := u.Products.CreateProduct(r.Context(), p); err != nil {
-			u.Logger.Error("create product", "error", err)
-			u.reviewWith(w, r, http.StatusInternalServerError, "Could not create the product")
-			return
-		}
-		pid = p.ID
 	case pid <= 0:
 		u.reviewWith(w, r, http.StatusBadRequest, "Pick a product or type a new product name")
 		return
 	}
-	res, err := u.Products.MapItem(r.Context(), id, pid)
+	res, err := u.Products.MapItem(r.Context(), id, pid, np)
 	if code, msg := handlers.MapItemError(err); code != 0 {
 		if code == http.StatusInternalServerError {
 			u.Logger.Error("map item", "error", err)

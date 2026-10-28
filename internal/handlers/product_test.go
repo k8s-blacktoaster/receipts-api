@@ -27,9 +27,13 @@ func (f *fakeProducts) CreateProduct(_ context.Context, p *models.Product) error
 	return nil
 }
 
-func (f *fakeProducts) MapItem(_ context.Context, item, product int64) (*models.MapResult, error) {
+func (f *fakeProducts) MapItem(ctx context.Context, item, product int64, np *models.Product) (*models.MapResult, error) {
 	if f.mapErr != nil {
 		return nil, f.mapErr
+	}
+	if np != nil {
+		_ = f.CreateProduct(ctx, np)
+		product = np.ID
 	}
 	f.mapped = append(f.mapped, [2]int64{item, product})
 	return &models.MapResult{ItemID: item, ProductID: product, AliasID: 1, AlsoMapped: 2}, nil

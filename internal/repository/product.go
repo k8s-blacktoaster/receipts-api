@@ -28,8 +28,10 @@ type ProductRepository interface {
 	ListReviewItems(ctx context.Context, limit, offset int) ([]models.ReviewItem, int, error)
 	// MapItem maps a line to a product, learns a merchant-scoped alias (text + item number)
 	// and applies it to the merchant's other unmapped lines. ErrReceiptBusy while the receipt
-	// is uploaded/parsing; ErrNotFound / ErrProductNotFound for unknown ids.
-	MapItem(ctx context.Context, itemID, productID int64) (*models.MapResult, error)
+	// is uploaded/parsing; ErrNotFound / ErrProductNotFound for unknown ids. With newProduct set
+	// (productID 0) the product is created in the same transaction, after the item checks, so a
+	// refused map leaves no orphan product.
+	MapItem(ctx context.Context, itemID, productID int64, newProduct *models.Product) (*models.MapResult, error)
 }
 
 // ErrProductNotFound is returned when a product id does not exist.
@@ -131,7 +133,7 @@ func (r *productRepo) ListReviewItems(ctx context.Context, limit, offset int) ([
 	return out, total, rows.Err()
 }
 
-func (r *productRepo) MapItem(ctx context.Context, itemID, productID int64) (*models.MapResult, error) {
+func (r *productRepo) MapItem(ctx context.Context, itemID, productID int64, newProduct *models.Product) (*models.MapResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -155,12 +157,19 @@ func (r *productRepo) MapItem(ctx context.Context, itemID, productID int64) (*mo
 		return nil, ErrReceiptBusy
 	}
 	it.RawText, it.ItemNumber = raw.String, strings.TrimSpace(itemNo.String)
-	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM products WHERE id = $1)`, productID).Scan(&exists); err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, ErrProductNotFound
+	if newProduct != nil {
+		if err := insertProduct(ctx, tx, newProduct); err != nil {
+			return nil, err
+		}
+		productID = newProduct.ID
+	} else {
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM products WHERE id = $1)`, productID).Scan(&exists); err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrProductNotFound
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE receipt_items SET product_id = $2, match_source = 'manual', match_confidence = 1,
@@ -245,7 +254,11 @@ func learnAlias(ctx context.Context, q txExec, merchantID int64, text, itemNo st
 }
 
 func (r *productRepo) CreateProduct(ctx context.Context, p *models.Product) error {
-	return r.db.QueryRowContext(ctx, `
+	return insertProduct(ctx, r.db, p)
+}
+
+func insertProduct(ctx context.Context, q txExec, p *models.Product) error {
+	return q.QueryRowContext(ctx, `
 		INSERT INTO products (canonical_name, brand, category, upc) VALUES ($1,$2,$3,$4)
 		RETURNING id, created_at`,
 		p.CanonicalName, nullStr(p.Brand), nullStr(p.Category), nullStr(p.UPC)).Scan(&p.ID, &p.CreatedAt)
