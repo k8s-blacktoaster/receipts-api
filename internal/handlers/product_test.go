@@ -75,6 +75,7 @@ func TestMapItemHandler(t *testing.T) {
 		{"/review/5/map", `{"product_id":9}`, repository.ErrReceiptBusy, 409},
 		{"/review/5/map", `{"product_id":9}`, repository.ErrNotFound, 404},
 		{"/review/5/map", `{"product_id":9}`, repository.ErrProductNotFound, 404},
+		{"/review/5/map", `{"product_id":9}`, repository.ErrConcurrentUpdate, 409},
 		{"/review/5/map", `{"product_id":9}`, context.DeadlineExceeded, 500},
 	}
 	for _, c := range cases {

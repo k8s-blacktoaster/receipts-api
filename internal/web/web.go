@@ -571,6 +571,8 @@ func (u *UI) merge(w http.ResponseWriter, r *http.Request) {
 		fail(http.StatusNotFound, "Merchant not found")
 	case errors.Is(err, repository.ErrReceiptBusy):
 		fail(http.StatusConflict, "A receipt of this merchant is still being extracted; try again when it finishes")
+	case errors.Is(err, repository.ErrConcurrentUpdate):
+		fail(http.StatusConflict, "Another change was saving at the same time; try again")
 	default:
 		u.Logger.Error("merge merchant", "error", err)
 		fail(http.StatusInternalServerError, "Could not merge")

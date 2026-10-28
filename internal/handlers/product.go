@@ -181,6 +181,8 @@ func MapItemError(err error) (int, string) {
 		return http.StatusNotFound, "Product not found"
 	case errors.Is(err, repository.ErrReceiptBusy):
 		return http.StatusConflict, "Receipt is queued for or undergoing extraction; try again when it finishes"
+	case errors.Is(err, repository.ErrConcurrentUpdate):
+		return http.StatusConflict, "The item changed at the same time (e.g. a merchant merge); try again"
 	}
 	return http.StatusInternalServerError, "Failed to map item"
 }

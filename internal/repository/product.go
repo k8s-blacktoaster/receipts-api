@@ -134,11 +134,49 @@ func (r *productRepo) ListReviewItems(ctx context.Context, limit, offset int) ([
 }
 
 func (r *productRepo) MapItem(ctx context.Context, itemID, productID int64, newProduct *models.Product) (*models.MapResult, error) {
+	var res *models.MapResult
+	err := withTxRetry(ctx, func() error {
+		var np *models.Product
+		if newProduct != nil {
+			cp := *newProduct
+			np = &cp
+		}
+		var err error
+		res, err = r.mapItemOnce(ctx, itemID, productID, np)
+		if err == nil && np != nil {
+			*newProduct = *np
+		}
+		return err
+	})
+	return res, err
+}
+
+// mapItemOnce takes locks in the same order as Merge: merchant row, then receipt + item, then
+// product, so the two cannot deadlock each other.
+func (r *productRepo) mapItemOnce(ctx context.Context, itemID, productID int64, newProduct *models.Product) (*models.MapResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
+	var lockedMerchant sql.NullInt64
+	err = tx.QueryRowContext(ctx, `SELECT r.merchant_id FROM receipt_items i JOIN receipts r ON r.id = i.receipt_id WHERE i.id = $1`, itemID).Scan(&lockedMerchant)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to load item: %w", err)
+	}
+	if lockedMerchant.Valid {
+		var one int
+		err := tx.QueryRowContext(ctx, `SELECT 1 FROM merchants WHERE id = $1 FOR UPDATE`, lockedMerchant.Int64).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errRetry // merged away between the two reads
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to lock merchant: %w", err)
+		}
+	}
 	var status string
 	var merchantID sql.NullInt64
 	var it models.ReceiptItem
@@ -153,6 +191,9 @@ func (r *productRepo) MapItem(ctx context.Context, itemID, productID int64, newP
 	if err != nil {
 		return nil, fmt.Errorf("failed to load item: %w", err)
 	}
+	if merchantID != lockedMerchant {
+		return nil, errRetry // receipt moved to another merchant (merge) meanwhile
+	}
 	if status == models.StatusUploaded || status == models.StatusParsing {
 		return nil, ErrReceiptBusy
 	}
@@ -166,12 +207,13 @@ func (r *productRepo) MapItem(ctx context.Context, itemID, productID int64, newP
 		}
 		productID = newProduct.ID
 	} else {
-		var exists bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM products WHERE id = $1)`, productID).Scan(&exists); err != nil {
-			return nil, err
-		}
-		if !exists {
+		var one int
+		err := tx.QueryRowContext(ctx, `SELECT 1 FROM products WHERE id = $1 FOR KEY SHARE`, productID).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrProductNotFound
+		}
+		if err != nil {
+			return nil, err
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `

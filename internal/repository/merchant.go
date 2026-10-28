@@ -140,6 +140,17 @@ func (r *merchantRepo) Merge(ctx context.Context, from, into int64) (*MergeResul
 	if from == into {
 		return nil, ErrSelfMerge
 	}
+	var res *MergeResult
+	err := withTxRetry(ctx, func() error {
+		var err error
+		res, err = r.mergeOnce(ctx, from, into)
+		return err
+	})
+	return res, err
+}
+
+// mergeOnce locks both merchant rows (id order) before touching receipts, stores or aliases.
+func (r *merchantRepo) mergeOnce(ctx context.Context, from, into int64) (*MergeResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
