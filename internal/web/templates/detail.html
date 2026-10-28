@@ -9,7 +9,7 @@
     <form method="post" action="/receipts/{{.ID}}" class="edit">
       <fieldset {{if pending .Status}}disabled{{end}}>
       <label>Store <input name="store_name" value="{{.StoreName}}" required></label>
-      {{if or .StoreNumber .StoreAddress}}<p class="hint">Store {{.StoreNumber}} {{.StoreAddress}}</p>{{end}}
+      {{if or .StoreNumber .StoreAddress .StoreCity}}<p class="hint">{{with .StoreNumber}}Store #{{.}} · {{end}}{{.StoreAddress}}{{with .StoreCity}}, {{.}}{{end}} {{.StoreState}} {{.StoreZip}}{{with .StorePhone}} · {{.}}{{end}}</p>{{end}}
       <label>Date <input type="date" name="date" value="{{.Date}}" required></label>
       <div class="row">
         <label>Subtotal <input name="subtotal" inputmode="decimal" value="{{money .SubtotalCents}}"></label>

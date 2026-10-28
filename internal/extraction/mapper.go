@@ -42,6 +42,7 @@ func Apply(r *models.Receipt, e *Extracted) {
 	r.StoreNumber = str(e.StoreNumber)
 	r.StoreAddress = str(e.StoreAddress)
 	r.StorePhone = str(e.StorePhone)
+	r.StoreCity, r.StoreState, r.StoreZip = str(e.StoreCity), strings.ToUpper(str(e.StoreState)), str(e.StoreZip)
 	r.Date = ""
 	if d := str(e.PurchaseDate); d != "" {
 		if _, err := time.Parse("2006-01-02", d); err == nil {

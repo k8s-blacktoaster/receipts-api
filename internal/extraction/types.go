@@ -9,7 +9,7 @@ import (
 )
 
 // PromptVersion is stored on source_documents so extractions can be re-run/compared.
-const PromptVersion = "receipt-v1"
+const PromptVersion = "receipt-v2" // v2: store city/state/zip
 
 // ErrNotImplemented is returned by providers that are wired but not built yet.
 var ErrNotImplemented = errors.New("extraction provider not implemented")
@@ -41,6 +41,9 @@ type Extracted struct {
 	StoreNumber   *string           `json:"store_number"`
 	StoreAddress  *string           `json:"store_address"`
 	StorePhone    *string           `json:"store_phone"`
+	StoreCity     *string           `json:"store_city"`
+	StoreState    *string           `json:"store_state"`
+	StoreZip      *string           `json:"store_zip"`
 	PurchaseDate  *string           `json:"purchase_date"` // YYYY-MM-DD
 	PurchaseTime  *string           `json:"purchase_time"` // HH:MM (24h), optional
 	Currency      *string           `json:"currency"`

@@ -53,6 +53,10 @@ type Receipt struct {
 	StoreNumber   string `json:"store_number,omitempty"`
 	StoreAddress  string `json:"store_address,omitempty"`
 	StorePhone    string `json:"store_phone,omitempty"`
+	// StoreCity/State/Zip live on the stores row (city, region, postal_code).
+	StoreCity  string `json:"store_city,omitempty"`
+	StoreState string `json:"store_state,omitempty"`
+	StoreZip   string `json:"store_zip,omitempty"`
 
 	Date        string     `json:"date"` // YYYY-MM-DD (local purchase date)
 	PurchasedAt *time.Time `json:"purchased_at,omitempty"`

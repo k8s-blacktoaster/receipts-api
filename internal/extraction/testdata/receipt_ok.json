@@ -1,7 +1,10 @@
 {
   "merchant_name": "Sprouts Farmers Market",
   "store_number": "0412",
-  "store_address": "27769 Santa Margarita Parkway, Mission Viejo, CA 92691",
+  "store_address": "27769 Santa Margarita Parkway",
+  "store_city": "Mission Viejo",
+  "store_state": "ca",
+  "store_zip": "92691",
   "store_phone": "(949) 582-3003",
   "purchase_date": "2025-08-10",
   "purchase_time": "17:42",

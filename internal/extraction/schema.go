@@ -8,6 +8,9 @@ Return only JSON matching the schema. Rules:
 - All money is integer cents (e.g. $12.34 -> 1234). Never use decimals for money.
 - Use null for anything not printed or unreadable; do not guess.
 - merchant_name is the chain/brand as printed (e.g. "Trader Joe's"), not the legal entity.
+- Store location, each copied as printed and null if absent: store_number (store/location id,
+  e.g. "#0412" -> "0412"), store_address (street line only), store_city, store_state (2-letter
+  US state or region code), store_zip, store_phone.
 - purchase_date is YYYY-MM-DD.
 - One items[] entry per printed line in order; quantity may be fractional for weighed goods.
 - discount_cents on an item is a POSITIVE amount taken off that line.
@@ -44,7 +47,8 @@ func ReceiptJSONSchema() map[string]any {
 	})
 	return obj(map[string]any{
 		"merchant_name": nullable("string"), "store_number": nullable("string"), "store_address": nullable("string"),
-		"store_phone": nullable("string"), "purchase_date": nullable("string"), "purchase_time": nullable("string"),
+		"store_phone": nullable("string"), "store_city": nullable("string"), "store_state": nullable("string"),
+		"store_zip": nullable("string"), "purchase_date": nullable("string"), "purchase_time": nullable("string"),
 		"currency":       nullable("string"),
 		"subtotal_cents": nullable("integer"), "tax_cents": nullable("integer"), "total_cents": nullable("integer"),
 		"savings_cents": nullable("integer"), "payment_method": nullable("string"), "payment_last4": nullable("string"),

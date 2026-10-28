@@ -81,6 +81,7 @@ func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt, keep
 	r.StoreName = strings.TrimSpace(r.StoreName) // as printed (legacy receipts.store_name)
 	r.StoreNumber = strings.TrimSpace(r.StoreNumber)
 	r.StoreAddress = strings.TrimSpace(r.StoreAddress)
+	r.StoreCity, r.StoreState, r.StoreZip = strings.TrimSpace(r.StoreCity), strings.TrimSpace(r.StoreState), strings.TrimSpace(r.StoreZip)
 	key := models.NormalizeMerchantName(r.StoreName)
 	if key == "" {
 		// photo receipts before/without a readable merchant: no merchant yet. The DB CHECK
@@ -105,17 +106,26 @@ func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt, keep
 	var id int64
 	if r.StoreNumber != "" {
 		err = q.QueryRowContext(ctx, `
-			INSERT INTO stores (merchant_id, store_number, address, phone) VALUES ($1, $2, $3, $4)
+			INSERT INTO stores (merchant_id, store_number, address, phone, city, region, postal_code)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT (merchant_id, store_number) WHERE store_number IS NOT NULL
 			DO UPDATE SET address = COALESCE(EXCLUDED.address, stores.address),
-			              phone = COALESCE(EXCLUDED.phone, stores.phone)
-			RETURNING id`, r.MerchantID, r.StoreNumber, nullStr(r.StoreAddress), nullStr(r.StorePhone)).Scan(&id)
+			              phone = COALESCE(EXCLUDED.phone, stores.phone),
+			              city = COALESCE(EXCLUDED.city, stores.city),
+			              region = COALESCE(EXCLUDED.region, stores.region),
+			              postal_code = COALESCE(EXCLUDED.postal_code, stores.postal_code)
+			RETURNING id`, r.MerchantID, r.StoreNumber, nullStr(r.StoreAddress), nullStr(r.StorePhone),
+			nullStr(r.StoreCity), nullStr(r.StoreState), nullStr(r.StoreZip)).Scan(&id)
 	} else {
 		err = q.QueryRowContext(ctx, `
-			INSERT INTO stores (merchant_id, address, phone) VALUES ($1, $2, $3)
+			INSERT INTO stores (merchant_id, address, phone, city, region, postal_code) VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT (merchant_id, lower(address)) WHERE store_number IS NULL AND address IS NOT NULL
-			DO UPDATE SET phone = COALESCE(EXCLUDED.phone, stores.phone)
-			RETURNING id`, r.MerchantID, r.StoreAddress, nullStr(r.StorePhone)).Scan(&id)
+			DO UPDATE SET phone = COALESCE(EXCLUDED.phone, stores.phone),
+			              city = COALESCE(EXCLUDED.city, stores.city),
+			              region = COALESCE(EXCLUDED.region, stores.region),
+			              postal_code = COALESCE(EXCLUDED.postal_code, stores.postal_code)
+			RETURNING id`, r.MerchantID, r.StoreAddress, nullStr(r.StorePhone),
+			nullStr(r.StoreCity), nullStr(r.StoreState), nullStr(r.StoreZip)).Scan(&id)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to resolve store: %w", err)
@@ -216,7 +226,7 @@ func createReceiptTx(ctx context.Context, tx txExec, receipt *models.Receipt) er
 }
 
 const receiptCols = `
-	r.id, r.store_name, r.store_category, r.store_address, r.store_phone, s.store_number,
+	r.id, r.store_name, r.store_category, r.store_address, r.store_phone, s.store_number, s.city, s.region, s.postal_code,
 	to_char(r.date, 'YYYY-MM-DD'), r.purchased_at, r.merchant_id, r.store_id,
 	r.subtotal_cents, r.tax_cents, r.total_cents, r.savings_cents, r.currency,
 	r.payment_method, r.payment_last4, r.source, r.external_id, r.source_document_id,
@@ -229,9 +239,10 @@ func scanReceipt(s rowScanner) (*models.Receipt, error) {
 	var (
 		rc                                                 models.Receipt
 		name, cat, addr, phone, num, date, pm, last4, perr sql.NullString
+		city, region, zip                                  sql.NullString
 		merchant                                           sql.NullInt64
 	)
-	err := s.Scan(&rc.ID, &name, &cat, &addr, &phone, &num, &date, &rc.PurchasedAt,
+	err := s.Scan(&rc.ID, &name, &cat, &addr, &phone, &num, &city, &region, &zip, &date, &rc.PurchasedAt,
 		&merchant, &rc.StoreID, &rc.SubtotalCents, &rc.TaxCents, &rc.TotalCents, &rc.SavingsCents,
 		&rc.Currency, &pm, &last4, &rc.Source, &rc.ExternalID, &rc.SourceDocumentID,
 		&rc.MemberID, &rc.UploadedByID, &rc.Confidence, &rc.Status, &perr,
@@ -241,6 +252,7 @@ func scanReceipt(s rowScanner) (*models.Receipt, error) {
 	}
 	rc.StoreName, rc.Date, rc.MerchantID = name.String, date.String, merchant.Int64
 	rc.StoreCategory, rc.StoreAddress, rc.StorePhone, rc.StoreNumber = cat.String, addr.String, phone.String, num.String
+	rc.StoreCity, rc.StoreState, rc.StoreZip = city.String, region.String, zip.String
 	rc.PaymentMethod, rc.PaymentLast4, rc.ParseError = pm.String, last4.String, perr.String
 	return &rc, nil
 }
