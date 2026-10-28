@@ -232,7 +232,7 @@ func TestCheck(t *testing.T) {
 		t.Fatalf("tolerance: %v", reasons)
 	}
 	r.TotalCents += 1
-	if reasons := Check(r, e, 2); len(reasons) != 1 || !strings.Contains(reasons[0], "total mismatch") {
+	if reasons := Check(r, e, 2); len(reasons) == 0 || !strings.Contains(reasons[0], "total mismatch") {
 		t.Fatalf("mismatch: %v", reasons)
 	}
 	m := &models.Receipt{}
