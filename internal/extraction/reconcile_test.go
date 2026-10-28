@@ -87,6 +87,16 @@ func TestReconcileNegativeAndDiscountLookingNames(t *testing.T) {
 			t.Errorf("missing %q in %v", want, rs)
 		}
 	}
+	// "1234 / 1234" style names (only digits and slashes) are discount references too
+	if rs := checkOf(&models.Receipt{SubtotalCents: 0, TotalCents: 0, Items: []models.ReceiptItem{item("1450796 / 1450796", 400, 0)}}); !hasReason(rs, "looks like a discount") {
+		t.Errorf("digits/slash name not flagged: %v", rs)
+	}
+	// a correct item whose raw_text includes its folded-in discount line is not flagged
+	ok := item("WIDGET", 2000, 300)
+	ok.RawText = "WIDGET 20.00 / 4455 3.00-"
+	if rs := checkOf(&models.Receipt{SubtotalCents: 1700, TotalCents: 1700, Items: []models.ReceiptItem{ok}}); len(rs) != 0 {
+		t.Errorf("folded discount raw_text flagged: %v", rs)
+	}
 	// returns may be negative
 	r2 := &models.Receipt{SubtotalCents: 700, TaxCents: 0, TotalCents: 700,
 		Items: []models.ReceiptItem{item("WIDGET", 1000, 0), {Name: "RETURNED GADGET", Quantity: 1, LineTotalCents: -300, IsReturn: true}}}

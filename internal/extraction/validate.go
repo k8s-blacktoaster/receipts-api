@@ -65,7 +65,9 @@ func Check(r *models.Receipt, e *Extracted, tol int64) []string {
 }
 
 // discountName matches item names that look like a discount/savings line rather than a product.
-var discountName = regexp.MustCompile(`(?i)\b(savings?|discount|coupon|instant\s*sav|markdown|you\s*saved)\b|\d+[.,]\d{2}\s*-\s*$|^\s*/\s*\d+`)
+// It is applied to the name, and to raw_text only when the item carries no discount (a correct
+// item's raw_text may legitimately include the discount line that was folded into it).
+var discountName = regexp.MustCompile(`(?i)\b(savings?|discount|coupon|instant\s*sav|markdown|you\s*saved)\b|\d+[.,]\d{2}\s*-\s*$|(^|\s)/\s*\d+|^[\d\s/]+$`)
 
 // checkItems reconciles line items against the subtotal and flags lines that look misread.
 // Generic (merchant-agnostic): sum(line_total) - sum(discount) + adjustments must equal the
@@ -83,7 +85,7 @@ func checkItems(r *models.Receipt, tol int64) []string {
 		if !it.IsReturn && (it.LineTotalCents < 0 || it.UnitPriceCents < 0) {
 			reasons = append(reasons, fmt.Sprintf("item %d %q has a negative price", i+1, it.Name))
 		}
-		if discountName.MatchString(it.Name) || discountName.MatchString(it.RawText) {
+		if discountName.MatchString(it.Name) || (it.DiscountCents == 0 && discountName.MatchString(it.RawText)) {
 			reasons = append(reasons, fmt.Sprintf("item %d %q looks like a discount line, not a product", i+1, it.Name))
 		}
 	}
