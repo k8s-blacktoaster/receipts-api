@@ -98,7 +98,7 @@ The API includes a complete Receipts CRUD API:
 | PUT | `/api/v1/receipts/{id}` | Update an existing receipt |
 | DELETE | `/api/v1/receipts/{id}` | Delete a receipt |
 | POST | `/api/v1/uploads` | Upload a receipt photo (multipart `image`, JPEG/PNG, max 20 MiB); 202 + queued extraction, 200 if the same image was already uploaded |
-| POST | `/api/v1/receipts/{id}/extract` | Re-run extraction for a photo receipt |
+| POST | `/api/v1/receipts/{id}/extract` | Re-run extraction for a photo receipt; 409 while parsing and always 409 for `reviewed` receipts (no force option in v1) |
 
 ### Photo extraction
 
@@ -107,6 +107,25 @@ A background worker moves it `uploaded -> parsing -> parsed | needs_review | fai
 `parse_error`, `parse_started_at` and `parsed_at`. A receipt lands in `needs_review` when a
 required field is missing or the printed total does not match subtotal + tax - savings (or
 subtotal + tax + adjustments) within `EXTRACTION_TOLERANCE_CENTS`.
+
+Status changes follow a fixed transition table (`internal/models/status.go`); invalid changes are
+rejected. A worker claims a receipt with one atomic `UPDATE ... WHERE status IN (...) RETURNING`,
+so concurrent workers, replicas or repeated `/extract` calls never parse the same receipt twice.
+`POST /receipts/{id}/extract` returns **409** while the receipt is `parsing`, and **always 409 for
+a `reviewed` receipt**: v1 never overwrites human-reviewed data and has no force option.
+
+Uploads are validated before anything is written: the image must fully decode as JPEG/PNG
+(truncated files get 400) and `member_id` / `uploaded_by_id` must be existing members (400
+otherwise). Provider errors are redacted (API key, `Authorization`/`Bearer` values) before they
+are stored in `parse_error`, logged, or returned.
+
+On SIGTERM the server stops accepting HTTP requests and extraction jobs, waits up to
+`EXTRACTION_SHUTDOWN_TIMEOUT` seconds (default 25) for in-flight provider calls, then cancels
+them. On the next start, receipts left `parsing` longer than the job timeout are reset to
+`uploaded` and requeued with everything else still `uploaded`.
+
+Rolling back migration 007 deletes receipts that were never parsed but leaves their image files
+in `UPLOAD_DIR` (orphaned; remove by hand).
 
 The extraction provider is chosen with `EXTRACTION_PROVIDER` (`xai` default, `anthropic` stub,
 `none`). The xAI provider calls the Grok vision model (`EXTRACTION_MODEL`, default `grok-4.20`)
@@ -209,6 +228,7 @@ UPLOAD_DIR=data/uploads
 EXTRACTION_PROVIDER=xai   # xai | anthropic | none
 EXTRACTION_MODEL=         # default grok-4.20
 XAI_API_KEY=              # never commit
+EXTRACTION_SHUTDOWN_TIMEOUT=25  # seconds SIGTERM waits for in-flight extractions
 ```
 
 ### Testing

@@ -293,7 +293,7 @@ const docTemplate = `{
         },
         "/receipts/{id}/extract": {
             "post": {
-                "description": "Queues extraction again for a photo receipt (e.g. after \"failed\"). Overwrites parsed items.",
+                "description": "Queues extraction again for a photo receipt in uploaded, parsed, needs_review or failed status. Overwrites parsed items.\nReturns 409 while the receipt is being parsed, and always 409 for a \"reviewed\" receipt: v1 never\noverwrites human-reviewed data and has no force option (reopen it to needs_review first).",
                 "produces": [
                     "application/json"
                 ],
@@ -337,6 +337,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Receipt not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Extraction in progress, or receipt already reviewed",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }

@@ -16,6 +16,9 @@
 - [ ] **ING-03**: Background worker extracts JSON via vision LLM with strict schema
 - [ ] **ING-04**: Validation (items vs subtotal, subtotal+tax vs total) flags receipts needs_review
 - [ ] **ING-05**: Pluggable extraction LLM: `Extractor` provider interface; Grok (xAI API, vision model, structured JSON output) is the default; Anthropic or others selectable by config. API key from k8s secret / env var, never in the repo. Tests use mocks and fixtures only, no live API calls.
+- [ ] **ING-06**: Each receipt is parsed at most once at a time: atomic DB claim (`uploaded|parsed|needs_review|failed -> parsing`), status transition table enforced on every status change, re-extract returns 409 while `parsing`
+- [ ] **ING-07**: Re-extract of a `reviewed` receipt always returns 409 in v1 (no force option; human-reviewed data is never overwritten by the model). Reopen to `needs_review` first if a re-parse is ever wanted.
+- [ ] **ING-08**: Uploads validated before any write (image fully decodes; member_id/uploaded_by_id exist, else 400); provider credentials redacted from stored/logged/returned errors; graceful shutdown waits `EXTRACTION_SHUTDOWN_TIMEOUT` for in-flight extractions
 ### Web UI
 - [ ] **UI-01**: Mobile-friendly web UI: camera capture on the phone, multiple photos per receipt, upload status
 - [ ] **UI-02**: Receipt list showing parse/review status; simple edit/review of parsed line items
