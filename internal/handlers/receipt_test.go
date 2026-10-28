@@ -92,3 +92,29 @@ func TestDeleteReceiptWhileParsing(t *testing.T) {
 		}
 	}
 }
+
+// QA minors: out-of-range money/quantities, negative totals and over-long text are 400.
+func TestUpdateReceiptBounds(t *testing.T) {
+	long := strings.Repeat("x", 100_000)
+	for name, body := range map[string]string{
+		"huge float qty":    `{"store_name":"S","date":"2026-10-01","items":[{"name":"a","quantity":1e308}]}`,
+		"money 1e308":       `{"store_name":"S","date":"2026-10-01","total_cents":1e308}`,
+		"int64 max":         `{"store_name":"S","date":"2026-10-01","subtotal_cents":9223372036854775807}`,
+		"negative total":    `{"store_name":"S","date":"2026-10-01","total_cents":-1}`,
+		"huge item price":   `{"store_name":"S","date":"2026-10-01","items":[{"name":"a","quantity":1,"unit_price_cents":100000000000}]}`,
+		"100KB store name":  `{"store_name":"` + long + `","date":"2026-10-01"}`,
+		"long item name":    `{"store_name":"S","date":"2026-10-01","items":[{"name":"` + strings.Repeat("y", 300) + `","quantity":1}]}`,
+		"blank item name":   `{"store_name":"S","date":"2026-10-01","items":[{"name":"  ","quantity":1}]}`,
+		"qty above maximum": `{"store_name":"S","date":"2026-10-01","items":[{"name":"a","quantity":100001}]}`,
+	} {
+		repo := &statusRepo{status: models.StatusParsed}
+		h := NewReceiptHandler(repo, slog.Default())
+		r := chi.NewRouter()
+		r.Put("/api/v1/receipts/{id}", h.UpdateReceipt)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/receipts/5", strings.NewReader(body)))
+		if rec.Code != 400 {
+			t.Errorf("%s: %d %.200s", name, rec.Code, rec.Body)
+		}
+	}
+}

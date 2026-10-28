@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+// MaxJSONBytes caps JSON request bodies.
+const MaxJSONBytes = 1 << 20
+
 func unsafeMethod(m string) bool {
 	return m == http.MethodPost || m == http.MethodPut || m == http.MethodPatch || m == http.MethodDelete
 }
@@ -64,6 +67,7 @@ func RequireJSON(next http.Handler) http.Handler {
 				refuse(w, r, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
 				return
 			}
+			r.Body = http.MaxBytesReader(w, r.Body, MaxJSONBytes)
 		}
 		next.ServeHTTP(w, r)
 	})

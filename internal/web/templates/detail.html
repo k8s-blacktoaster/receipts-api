@@ -22,21 +22,22 @@
       <label>Payment <input name="payment_method" value="{{.PaymentMethod}}"></label>
       <h3>Items</h3>
       <table class="items" id="items">
-        <thead><tr><th>Item</th><th>Qty</th><th>Price</th><th>Line</th><th>Disc.</th></tr></thead>
+        <thead><tr><th>Item</th><th>Qty</th><th>Price</th><th>Line</th><th>Disc.</th><th>Remove</th></tr></thead>
         <tbody>
-        {{range .Items}}<tr>
+        {{range $i, $_ := .Items}}<tr>
           <td><input name="item_name" value="{{.Name}}" aria-label="Item name"></td>
           <td><input name="item_qty" inputmode="decimal" value="{{qty .Quantity}}" aria-label="Quantity"></td>
           <td><input name="item_price" inputmode="decimal" value="{{money .UnitPriceCents}}" aria-label="Unit price"></td>
           <td><input name="item_total" inputmode="decimal" value="{{money .LineTotalCents}}" aria-label="Line total"></td>
           <td><input name="item_discount" inputmode="decimal" value="{{money .DiscountCents}}" aria-label="Discount"></td>
+          <td><input type="checkbox" name="item_remove" value="{{$i}}" aria-label="Remove item"></td>
         </tr>{{end}}
         <tr class="new"><td><input name="item_name" placeholder="New item" aria-label="New item name"></td>
           <td><input name="item_qty" inputmode="decimal" placeholder="1"></td><td><input name="item_price" inputmode="decimal"></td>
-          <td><input name="item_total" inputmode="decimal"></td><td><input name="item_discount" inputmode="decimal"></td></tr>
+          <td><input name="item_total" inputmode="decimal"></td><td><input name="item_discount" inputmode="decimal"></td><td></td></tr>
         </tbody>
       </table>
-      <p class="hint">Clear an item's name to remove it. <button type="button" class="link" data-add-row>+ row</button></p>
+      <p class="hint">Tick Remove to delete an item. <button type="button" class="link" data-add-row>+ row</button></p>
       {{if .Adjustments}}<h3>Adjustments</h3><ul class="adj">{{range .Adjustments}}<li>{{.Kind}} {{.RawText}} ${{money .AmountCents}}</li>{{end}}</ul>{{end}}
       <div class="actions">
         <button type="submit" class="btn">Save</button>

@@ -3,9 +3,11 @@ package web
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"receipts-db/internal/models"
 )
@@ -22,7 +24,7 @@ func parseCents(s string) (int64, error) {
 	if whole == "" {
 		whole = "0"
 	}
-	if len(frac) > 2 || strings.ContainsAny(whole+frac, "+-eE ") {
+	if len(frac) > 2 || len(whole) > 10 || strings.ContainsAny(whole+frac, "+-eE ") {
 		return 0, errors.New("bad amount")
 	}
 	for len(frac) < 2 {
@@ -42,7 +44,8 @@ func parseCents(s string) (int64, error) {
 
 // applyForm copies the edit form onto rc. Item rows are matched by position to the existing
 // items (keeping fields the form does not show, e.g. sku/upc/product), extra rows are new items,
-// and rows with an empty name are removed. Adjustments are kept as-is.
+// and rows ticked "remove" are dropped. A row with an empty name is an error unless it is an
+// untouched blank new row. Adjustments are kept as-is.
 func applyForm(rc *models.Receipt, f url.Values) error {
 	money := func(field, label string) (int64, error) {
 		c, err := parseCents(f.Get(field))
@@ -75,11 +78,27 @@ func applyForm(rc *models.Receipt, f url.Values) error {
 		}
 		return ""
 	}
+	remove := map[int]bool{}
+	for _, v := range f["item_remove"] {
+		if n, err := strconv.Atoi(v); err == nil {
+			remove[n] = true
+		}
+	}
 	var items []models.ReceiptItem
 	for i, name := range names {
 		name = strings.TrimSpace(name)
-		if name == "" {
+		if remove[i] {
 			continue
+		}
+		if name == "" {
+			blank := strings.TrimSpace(at(qtys, i)+at(prices, i)+at(lines, i)+at(discs, i)) == ""
+			if i >= len(rc.Items) && blank {
+				continue // the empty "new item" row
+			}
+			return fmt.Errorf("item %d: name is required (tick Remove to delete the item)", i+1)
+		}
+		if utf8.RuneCountInString(name) > models.MaxNameLen {
+			return fmt.Errorf("item %d: name is too long (max %d characters)", i+1, models.MaxNameLen)
 		}
 		var it models.ReceiptItem
 		if i < len(rc.Items) {
@@ -91,8 +110,8 @@ func applyForm(rc *models.Receipt, f url.Values) error {
 			q = "1"
 		}
 		qty, err := strconv.ParseFloat(q, 64)
-		if err != nil || qty <= 0 {
-			return fmt.Errorf("item %d (%s): quantity must be a positive number", i+1, name)
+		if err != nil || qty <= 0 || math.IsNaN(qty) || math.IsInf(qty, 0) || qty > models.MaxQuantity {
+			return fmt.Errorf("item %d (%s): quantity must be a number between 0 and %d", i+1, name, models.MaxQuantity)
 		}
 		it.Quantity = qty
 		if it.UnitPriceCents, err = money2(at(prices, i), i, name, "price"); err != nil {

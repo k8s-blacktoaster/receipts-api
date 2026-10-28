@@ -155,6 +155,7 @@ func newEnv(t *testing.T) *env {
 		8:  {ID: 8, Source: "photo", Status: models.StatusParsing, SourceDocumentID: &doc},
 		9:  {ID: 9, StoreName: "Costco", Date: "2026-10-02", Source: "photo", Status: models.StatusReviewed, SourceDocumentID: &doc},
 		10: {ID: 10, Source: "photo", Status: models.StatusUploaded, SourceDocumentID: &doc},
+		11: {ID: 11, Source: "photo", Status: models.StatusFailed, SourceDocumentID: &doc, ParseError: "provider down"},
 	}}
 	e := &env{rs: rs, ms: &fakeMerchants{m: []models.Merchant{{ID: 1, Name: "sprouts"}, {ID: 2, Name: "trader_joes", ReceiptCount: 4}}},
 		in: &fakeIngest{}, q: &fakeQueue{}}
@@ -271,12 +272,42 @@ func TestEditAndApprove(t *testing.T) {
 		got.Items[1].Quantity != 1 || got.Items[1].LineTotalCents != 25 || got.Status != models.StatusNeedsReview {
 		t.Fatalf("saved: %+v", got)
 	}
-	// removing a row by clearing its name
-	form.Set("item_name", "")
+	// a blank name is an error (it used to silently delete the item)
 	form["item_name"] = []string{"", "Bananas"}
+	if rec := e.do(http.MethodPost, "/receipts/7", form, true); rec.Code != 400 || !strings.Contains(rec.Body.String(), "name is required") ||
+		len(e.rs.r[7].Items) != 2 {
+		t.Fatalf("blank name: %d items=%d", rec.Code, len(e.rs.r[7].Items))
+	}
+	// removing a row with its Remove checkbox
+	form["item_name"] = []string{"Organic milk", "Bananas"}
+	form["item_remove"] = []string{"0"}
 	e.do(http.MethodPost, "/receipts/7", form, true)
 	if len(e.rs.r[7].Items) != 1 || e.rs.r[7].Items[0].Name != "Bananas" {
 		t.Fatalf("remove row: %+v", e.rs.r[7].Items)
+	}
+	delete(form, "item_remove")
+	form["item_name"] = []string{"Bananas"}
+	// QA minors: huge/invalid quantities and money, over-long names -> 400, nothing saved
+	for field, v := range map[string]string{"item_qty": "1e308", "subtotal": "99999999999999", "total": "-5",
+		"store_name": strings.Repeat("x", 100_000)} {
+		bad := url.Values{}
+		for k, vv := range form {
+			bad[k] = append([]string(nil), vv...)
+		}
+		bad.Set(field, v)
+		if rec := e.do(http.MethodPost, "/receipts/7", bad, true); rec.Code != 400 {
+			t.Errorf("%s=%.20s: %d", field, v, rec.Code)
+		}
+	}
+	for _, q := range []string{"NaN", "Inf", "-1", "200000"} {
+		bad := url.Values{}
+		for k, vv := range form {
+			bad[k] = append([]string(nil), vv...)
+		}
+		bad["item_qty"] = []string{q}
+		if rec := e.do(http.MethodPost, "/receipts/7", bad, true); rec.Code != 400 {
+			t.Errorf("qty %s: %d", q, rec.Code)
+		}
 	}
 	// bad money
 	form.Set("tax", "abc")
@@ -372,6 +403,29 @@ func TestParseCents(t *testing.T) {
 	for _, bad := range []string{"1.234", "abc", "1e5", "--1"} {
 		if _, err := parseCents(bad); err == nil {
 			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+// QA: approving an incomplete failed receipt is a 400 with guidance, not a 500.
+func TestApproveIncompleteIs400(t *testing.T) {
+	e := newEnv(t)
+	rec := e.do(http.MethodPost, "/receipts/11/approve", nil, true)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "store name") || e.rs.r[11].Status != models.StatusFailed {
+		t.Fatalf("approve incomplete: %d %s", rec.Code, e.rs.r[11].Status)
+	}
+}
+
+// QA: next must be a local path.
+func TestSafeNext(t *testing.T) {
+	for in, want := range map[string]string{
+		"/receipts/7": "/receipts/7", "/merchants?x=1": "/merchants?x=1",
+		"": "/receipts", "receipts": "/receipts", "//evil.example": "/receipts", "/\\evil.example": "/receipts",
+		"/a//b": "/receipts", "/\tevil": "/receipts", "/x\ny": "/receipts", "/ x": "/receipts", "/\x7f": "/receipts",
+		"https://evil.example": "/receipts", "/%2F%2Fevil": "/%2F%2Fevil", "/\u0085x": "/receipts",
+	} {
+		if got := safeNext(in); got != want {
+			t.Errorf("safeNext(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
