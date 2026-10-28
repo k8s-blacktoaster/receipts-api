@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/lib/pq"
 	"strings"
 	"time"
 
@@ -24,6 +25,8 @@ type ReceiptRepository interface {
 	Count(ctx context.Context) (int, error)
 	// UpdateItem edits one parsed line item during review (marks edited_at).
 	UpdateItem(ctx context.Context, item *models.ReceiptItem) error
+	// ListIDsByStatus returns receipt ids in the given statuses, oldest first (worker recovery).
+	ListIDsByStatus(ctx context.Context, statuses ...string) ([]int, error)
 	// SetStatus moves a receipt through the photo pipeline.
 	SetStatus(ctx context.Context, id int, status, parseError string, reviewerID *int64) error
 }
@@ -49,7 +52,10 @@ func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt) erro
 	r.StoreAddress = strings.TrimSpace(r.StoreAddress)
 	key := models.NormalizeMerchantName(r.StoreName)
 	if key == "" {
-		return errors.New("store name must contain a letter or digit")
+		// photo receipts before/without a readable merchant: no merchant yet. The DB CHECK
+		// receipts_complete_when_parsed only allows that while uploaded/parsing/needs_review/failed.
+		r.MerchantID, r.StoreID = 0, nil
+		return nil
 	}
 	err := q.QueryRowContext(ctx, `
 		INSERT INTO merchants (name, category) VALUES ($1, $2)
@@ -119,20 +125,29 @@ func insertChildren(ctx context.Context, q txExec, r *models.Receipt, now time.T
 }
 
 func (r *receiptRepo) Create(ctx context.Context, receipt *models.Receipt) error {
-	receipt.Normalize()
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
+	if err := createReceiptTx(ctx, tx, receipt); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return nil
+}
 
+func createReceiptTx(ctx context.Context, tx txExec, receipt *models.Receipt) error {
+	receipt.Normalize()
 	if err := resolveMerchantStore(ctx, tx, receipt); err != nil {
 		return err
 	}
 	now := time.Now()
 	receipt.CreatedAt, receipt.UpdatedAt = now, now
 
-	err = tx.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, `
 		INSERT INTO receipts (
 			store_name, store_category, store_address, store_phone, date, purchased_at,
 			merchant_id, store_id, subtotal_cents, tax_cents, total_cents, savings_cents, currency,
@@ -140,8 +155,8 @@ func (r *receiptRepo) Create(ctx context.Context, receipt *models.Receipt) error
 			member_id, uploaded_by_id, confidence, status, parse_error, created_at, updated_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$24)
 		RETURNING id`,
-		receipt.StoreName, nullStr(receipt.StoreCategory), nullStr(receipt.StoreAddress), nullStr(receipt.StorePhone),
-		receipt.Date, receipt.PurchasedAt, receipt.MerchantID, receipt.StoreID,
+		nullStr(receipt.StoreName), nullStr(receipt.StoreCategory), nullStr(receipt.StoreAddress), nullStr(receipt.StorePhone),
+		nullStr(receipt.Date), receipt.PurchasedAt, nullID(receipt.MerchantID), receipt.StoreID,
 		receipt.SubtotalCents, receipt.TaxCents, receipt.TotalCents, receipt.SavingsCents, receipt.Currency,
 		nullStr(receipt.PaymentMethod), nullStr(receipt.PaymentLast4), receipt.Source, receipt.ExternalID,
 		receipt.SourceDocumentID, receipt.MemberID, receipt.UploadedByID, receipt.Confidence,
@@ -150,13 +165,7 @@ func (r *receiptRepo) Create(ctx context.Context, receipt *models.Receipt) error
 	if err != nil {
 		return fmt.Errorf("failed to create receipt: %w", err)
 	}
-	if err := insertChildren(ctx, tx, receipt, now); err != nil {
-		return err
-	}
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-	return nil
+	return insertChildren(ctx, tx, receipt, now)
 }
 
 const receiptCols = `
@@ -171,17 +180,19 @@ type rowScanner interface{ Scan(dest ...any) error }
 
 func scanReceipt(s rowScanner) (*models.Receipt, error) {
 	var (
-		rc                                     models.Receipt
-		cat, addr, phone, num, pm, last4, perr sql.NullString
+		rc                                                 models.Receipt
+		name, cat, addr, phone, num, date, pm, last4, perr sql.NullString
+		merchant                                           sql.NullInt64
 	)
-	err := s.Scan(&rc.ID, &rc.StoreName, &cat, &addr, &phone, &num, &rc.Date, &rc.PurchasedAt,
-		&rc.MerchantID, &rc.StoreID, &rc.SubtotalCents, &rc.TaxCents, &rc.TotalCents, &rc.SavingsCents,
+	err := s.Scan(&rc.ID, &name, &cat, &addr, &phone, &num, &date, &rc.PurchasedAt,
+		&merchant, &rc.StoreID, &rc.SubtotalCents, &rc.TaxCents, &rc.TotalCents, &rc.SavingsCents,
 		&rc.Currency, &pm, &last4, &rc.Source, &rc.ExternalID, &rc.SourceDocumentID,
 		&rc.MemberID, &rc.UploadedByID, &rc.Confidence, &rc.Status, &perr,
 		&rc.ParseStartedAt, &rc.ParsedAt, &rc.ReviewedAt, &rc.ReviewedByID, &rc.CreatedAt, &rc.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
+	rc.StoreName, rc.Date, rc.MerchantID = name.String, date.String, merchant.Int64
 	rc.StoreCategory, rc.StoreAddress, rc.StorePhone, rc.StoreNumber = cat.String, addr.String, phone.String, num.String
 	rc.PaymentMethod, rc.PaymentLast4, rc.ParseError = pm.String, last4.String, perr.String
 	return &rc, nil
@@ -265,13 +276,13 @@ func (r *receiptRepo) Update(ctx context.Context, receipt *models.Receipt) error
 			store_name = $2, store_category = $3, store_address = $4, store_phone = $5, date = $6,
 			purchased_at = $7, merchant_id = $8, store_id = $9, subtotal_cents = $10, tax_cents = $11,
 			total_cents = $12, savings_cents = $13, currency = $14, payment_method = $15,
-			payment_last4 = $16, member_id = $17, status = $18, updated_at = $19
+			payment_last4 = $16, member_id = $17, status = $18, updated_at = $19, confidence = $20
 		WHERE id = $1`,
-		receipt.ID, receipt.StoreName, nullStr(receipt.StoreCategory), nullStr(receipt.StoreAddress),
-		nullStr(receipt.StorePhone), receipt.Date, receipt.PurchasedAt, receipt.MerchantID, receipt.StoreID,
+		receipt.ID, nullStr(receipt.StoreName), nullStr(receipt.StoreCategory), nullStr(receipt.StoreAddress),
+		nullStr(receipt.StorePhone), nullStr(receipt.Date), receipt.PurchasedAt, nullID(receipt.MerchantID), receipt.StoreID,
 		receipt.SubtotalCents, receipt.TaxCents, receipt.TotalCents, receipt.SavingsCents, receipt.Currency,
 		nullStr(receipt.PaymentMethod), nullStr(receipt.PaymentLast4), receipt.MemberID, receipt.Status,
-		receipt.UpdatedAt)
+		receipt.UpdatedAt, receipt.Confidence)
 	if err != nil {
 		return fmt.Errorf("failed to update receipt: %w", err)
 	}
@@ -374,4 +385,21 @@ func (r *receiptRepo) Count(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("failed to count receipts: %w", err)
 	}
 	return count, nil
+}
+
+func (r *receiptRepo) ListIDsByStatus(ctx context.Context, statuses ...string) ([]int, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id FROM receipts WHERE status = ANY($1) ORDER BY id`, pq.Array(statuses))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list receipts by status: %w", err)
+	}
+	defer rows.Close()
+	var ids []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }

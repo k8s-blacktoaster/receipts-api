@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -183,6 +184,9 @@ func (r *Receipt) Validate() error {
 	if r.StoreName == "" {
 		return errors.New("Store name is required")
 	}
+	if NormalizeMerchantName(r.StoreName) == "" {
+		return errors.New("Store name must contain a letter or digit")
+	}
 	if r.Date == "" {
 		return errors.New("Date is required")
 	}
@@ -262,4 +266,29 @@ type PurchaseLocation struct {
 	Quantity       float64 `json:"quantity"`
 	UnitPriceCents int64   `json:"unit_price_cents"`
 	NetTotalCents  int64   `json:"net_total_cents"`
+}
+
+// SourceDocument is an uploaded photo (or other input) and its raw extraction.
+type SourceDocument struct {
+	ID            int64           `json:"id"`
+	Kind          string          `json:"kind"`
+	ObjectKey     string          `json:"object_key,omitempty"`
+	SHA256        []byte          `json:"-"`
+	MimeType      string          `json:"mime_type,omitempty"`
+	UploadedByID  *int64          `json:"uploaded_by_id,omitempty"`
+	RawExtraction json.RawMessage `json:"raw_extraction,omitempty"`
+	Model         string          `json:"model,omitempty"`
+	PromptVersion string          `json:"prompt_version,omitempty"`
+	ParseState    string          `json:"parse_state"`
+	Error         string          `json:"error,omitempty"`
+	ParsedAt      *time.Time      `json:"parsed_at,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
+}
+
+// UploadResult is returned by POST /uploads.
+type UploadResult struct {
+	ReceiptID        int    `json:"receipt_id"`
+	SourceDocumentID int64  `json:"source_document_id"`
+	Status           string `json:"status"`
+	Duplicate        bool   `json:"duplicate"`
 }
