@@ -1,8 +1,8 @@
 # State
 
 **Milestone:** v1.0
-**Current phase:** 2 - Upload + extraction pipeline
-**Status:** phase 1 merged (PR #1); phase 2 executed on phase-02-upload-extraction, PR open, awaiting QA verify
+**Current phase:** 3 - Mobile web UI
+**Status:** phases 1-2 merged (PR #1, PR #2); phase 3 executed on phase-03-web-ui, PR open, awaiting review
 **Last updated:** 2026-10-27
 
 ## Notes
@@ -20,3 +20,8 @@
 - 2026-10-27 phase 1 merged to main (PR #1). Phase 2 carried over from local WIP onto
   phase-02-upload-extraction: migration 007, uploads, extraction provider (xAI default,
   Anthropic stub), pipeline/worker, docs. See 02-01-SUMMARY.md.
+- 2026-10-27 phase 2 merged (PR #2, 9f48834). Phase 3 on phase-03-web-ui: embedded web UI,
+  edit/delete guards, rerun-on-skip queue, merchant rename (409 on collision), store location
+  capture, upload normalization to one JPEG + HEIC via libheif CLI (migration 008), Docker
+  test stage. See phases/03-web-ui/03-01-SUMMARY.md. Live golden check blocked: xAI rejected
+  the local .env key ("Incorrect API key provided").

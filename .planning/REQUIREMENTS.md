@@ -20,12 +20,14 @@
 - [ ] **ING-07**: Re-extract of a `reviewed` receipt always returns 409 in v1 (no force option; human-reviewed data is never overwritten by the model). Reopen to `needs_review` first if a re-parse is ever wanted.
 - [ ] **ING-08**: Uploads validated before any write (image fully decodes; member_id/uploaded_by_id exist, else 400); provider credentials redacted from stored/logged/returned errors; graceful shutdown waits `EXTRACTION_SHUTDOWN_TIMEOUT` for in-flight extractions
 ### Web UI
-- [ ] **UI-01**: Mobile-friendly web UI: camera capture on the phone, multiple photos per receipt, upload status
-- [ ] **UI-02**: Receipt list showing parse/review status; simple edit/review of parsed line items
-- [ ] **UI-03**: Served from the same deployment (static assets embedded in the Go binary), VPN-only. No chat or bot in the UI.
-- [ ] **UI-04** (phase 3): Manual merchant rename in the web UI is a simple edit; the new name is re-normalized with NormalizeMerchantName. If the key already belongs to another merchant the rename is refused with 409 naming that merchant (v1 decision 2026-10-27: no silent merge; an explicit merge that dedupes stores/aliases is deferred to phase 4).
-- [ ] **UI-05** (phase 3): Edits to a receipt, its items or adjustments are refused with 409 while the receipt is `uploaded` (queued) or `parsing`, so a re-extract or later parse can never overwrite them; DELETE is 409 while `parsing`. Re-extract moves the receipt to `uploaded` first.
-- [ ] **UI-06** (phase 3): Member picker (cookie), no other auth; access control is the VPN.
+- [x] **UI-01**: Mobile-friendly web UI: camera capture on the phone, upload status (phase 3; multiple photos per receipt deferred)
+- [x] **UI-02**: Receipt list showing parse/review status; simple edit/review of parsed line items
+- [x] **UI-03**: Served from the same deployment (static assets embedded in the Go binary), VPN-only. No chat or bot in the UI.
+- [x] **UI-04** (phase 3): Manual merchant rename in the web UI is a simple edit; the new name is re-normalized with NormalizeMerchantName. If the key already belongs to another merchant the rename is refused with 409 naming that merchant (v1 decision 2026-10-27: no silent merge; an explicit merge that dedupes stores/aliases is deferred to phase 4).
+- [x] **UI-05** (phase 3): Edits to a receipt, its items or adjustments are refused with 409 while the receipt is `uploaded` (queued) or `parsing`, so a re-extract or later parse can never overwrite them; DELETE is 409 while `parsing`. Re-extract moves the receipt to `uploaded` first.
+- [x] **UI-06** (phase 3): Member picker (cookie), no other auth; access control is the VPN.
+- [x] **UI-07** (phase 3): HEIC/HEIF accepted (magic bytes). Every upload is converted to ONE normalized JPEG (EXIF orientation applied, long edge <= 2000 px, q80, all EXIF/GPS stripped); only the JPEG is stored and used for extraction/UI. Dedupe hash = sha256 of the original bytes. `KEEP_ORIGINAL_UPLOADS` (default false) also keeps the original. HEIC decoded by the libheif CLI (container: libheif-tools). xAI accepts only JPEG/PNG.
+- [x] **ING-09** (phase 3): Extraction captures store number, street, city, state, zip, phone; upserted onto `stores` (city, region, postal_code) by the F6 key and linked; repeats dedupe.
 ### Normalization
 - [ ] **NORM-01**: Line items map to canonical products via merchant-scoped item number / UPC, then alias, then fuzzy/LLM suggestion
 - [ ] **NORM-02**: Unmapped/low-confidence lines appear in the review queue and are fixable

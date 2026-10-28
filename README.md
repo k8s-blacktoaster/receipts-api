@@ -97,8 +97,42 @@ The API includes a complete Receipts CRUD API:
 | POST | `/api/v1/receipts` | Create a new receipt |
 | PUT | `/api/v1/receipts/{id}` | Update an existing receipt; omitted or unchanged `status` is kept; users may only make review moves (parsed -> needs_review/reviewed, needs_review -> reviewed, failed -> reviewed, reviewed -> needs_review), anything else is 409; every PUT while `parsing` is 409; 400 for unknown values |
 | DELETE | `/api/v1/receipts/{id}` | Delete a receipt |
-| POST | `/api/v1/uploads` | Upload a receipt photo (multipart `image`, JPEG/PNG, max 20 MiB); 202 + queued extraction, 200 if the same image was already uploaded |
+| POST | `/api/v1/uploads` | Upload a receipt photo (multipart `image`, JPEG/PNG/HEIC, max 20 MiB); 202 + queued extraction, 200 if the same image was already uploaded |
 | POST | `/api/v1/receipts/{id}/extract` | Re-run extraction for a photo receipt; 409 while parsing and always 409 for `reviewed` receipts (no force option in v1) |
+
+### Web UI
+
+`/` serves a phone-friendly UI from the same binary (templates and static files via `go:embed`;
+server-rendered `html/template` plus a little vanilla JS, and it works without JS). It is meant
+for the VPN only: there is no login, just a member picker stored in the `receipts_member`
+cookie (HttpOnly, SameSite=Lax). Cross-site POSTs are rejected (403, Origin / Sec-Fetch-Site
+check). There is no chat or bot in the UI.
+
+- **Receipts** (`/receipts`): camera button (`capture=environment`) and library picker
+  (`accept="image/*,.heic,.heif"`), list with status badges (uploaded, parsing, parsed,
+  needs review, failed, reviewed).
+- **Detail** (`/receipts/{id}`): the photo beside the header fields, items and adjustments;
+  edit, Approve (-> reviewed), Re-extract, Delete. While a receipt is `uploaded` or `parsing` the
+  page auto-refreshes and edits are disabled; the server refuses them with 409 anyway. Re-extract
+  explains its 409s (parsing; reviewed receipts can't be re-extracted in v1).
+- **Merchants** (`/merchants`): rename. The new name is re-normalized; a name that already belongs
+  to another merchant is refused with 409 naming it (no merge in v1).
+
+### Upload normalization (HEIC)
+
+Every upload (JPEG, PNG, HEIC/HEIF) is converted on the server into **one normalized JPEG**:
+EXIF orientation applied, long edge at most 2000 px, quality 80, and **all metadata (EXIF, GPS)
+stripped** because the image is re-encoded from pixels. Only that JPEG is stored
+(`receipts/<sha[:2]>/<sha>.jpg`) and used for extraction, re-extract and the UI. Duplicate
+detection uses the sha256 of the **original** bytes (`source_documents.sha256`); the JPEG's hash
+is in `jpeg_sha256`. With `KEEP_ORIGINAL_UPLOADS=true` the original is also kept
+(`<sha>.orig.<ext>`, `original_object_key`); by default it is never written.
+
+HEIC is decoded by the libheif CLI (`heif-dec`, or `heif-convert`; `sips` on macOS for dev), so
+the binary stays pure Go (`CGO_ENABLED=0`) and a decoder crash can't take down the server. The
+container images install `libheif-tools` and the devcontainer `libheif-examples`. Override the
+binary with `HEIC_DECODER`. Without a decoder, HEIC uploads get 415 with guidance. xAI only
+accepts JPEG/PNG images, so the provider always gets the JPEG.
 
 ### Photo extraction
 
@@ -108,21 +142,28 @@ A background worker moves it `uploaded -> parsing -> parsed | needs_review | fai
 required field is missing or the printed total does not match subtotal + tax - savings (or
 subtotal + tax + adjustments) within `EXTRACTION_TOLERANCE_CENTS`.
 
+Extraction also captures the store location (store number, street, city, state, zip, phone);
+it is upserted onto the `stores` row for that merchant (by store number, else by address) and
+linked to the receipt, so repeat receipts from the same store share one row.
+
 Status changes follow a fixed transition table (`internal/models/status.go`); invalid changes are
 rejected with 409, including via `PUT /receipts/{id}`, which can never set `parsing`. A worker claims a receipt with one atomic `UPDATE ... WHERE status IN (...) RETURNING`,
 so concurrent workers, replicas or repeated `/extract` calls never parse the same receipt twice.
 `POST /receipts/{id}/extract` returns **409** while the receipt is `parsing`, and **always 409 for
 a `reviewed` receipt**: v1 never overwrites human-reviewed data and has no force option.
 
-Uploads are validated before anything is written: the image must fully decode as JPEG/PNG
-(truncated files get 400) and `member_id` / `uploaded_by_id` must be existing members (400
+Uploads are validated before anything is written: the type is detected from magic bytes
+(JPEG, PNG, HEIC/HEIF; anything else gets 415), the image must fully decode (truncated files get
+400) and `member_id` / `uploaded_by_id` must be existing members (400
 otherwise). Provider errors are redacted (API key, `Authorization`/`Bearer` values) before they
 are stored in `parse_error`, logged, or returned.
 
 Each claim stores a token (its exact `parse_started_at`). The worker's final write (fields,
 items, status), a failure, or a release only applies while the row is still `parsing` under that
 token, so a reset/re-claimed receipt or a racing edit is never overwritten. User edits are
-refused (409) while a receipt is `parsing`.
+refused (409) while a receipt is `uploaded` (queued) or `parsing`, and DELETE is 409 while
+`parsing`. Re-extract moves the receipt to `uploaded` first, so a queued job can never overwrite
+an edit.
 
 On SIGTERM the server stops accepting HTTP requests and extraction jobs, waits up to
 `EXTRACTION_SHUTDOWN_TIMEOUT` seconds (default 25) for in-flight provider calls, then cancels
@@ -208,8 +249,20 @@ The template includes a `products` table with:
 
 ## Development
 
+### Local secrets (.env)
+Put `XAI_API_KEY=...` (and any other overrides) in `.env` at the repo root. It is gitignored and
+in `.dockerignore`; never commit it. The VS Code "Launch API" config loads it via `envFile`.
+From a shell:
+
+```bash
+set -a; . ./.env; set +a
+go run ./cmd/api
+```
+
+Automated tests never use the real key; they use fake providers.
+
 ### VS Code Integration
-- **F5 Debugging:** Automatically configured for dev container
+- **F5 Debugging:** Automatically configured for dev container (loads `.env` via `envFile`)
 - **Extensions:** Pre-installed Go, Docker, and Git extensions
 - **Settings:** Go tools, formatting, and linting pre-configured
 
@@ -234,6 +287,8 @@ DB_MAX_IDLE=5
 
 # Uploads / extraction (see "Photo extraction"; XAI_API_KEY from env or k8s Secret only)
 UPLOAD_DIR=data/uploads
+KEEP_ORIGINAL_UPLOADS=false  # also store the original upload next to the normalized JPEG
+HEIC_DECODER=             # default: search heif-dec, heif-convert, sips (macOS)
 EXTRACTION_PROVIDER=xai   # xai | anthropic | none
 EXTRACTION_MODEL=         # default grok-4.20
 XAI_API_KEY=              # never commit
@@ -270,6 +325,11 @@ Manual API testing is available using HTTP files in the `tests/http/` directory:
 
 3. **Available test files:**
    - `receipts.http` - Receipt CRUD operations (POST, GET, DELETE) with base URL configured
+
+### Docker
+`docker build --target test .` runs `go vet` and `go test` in the image (DB integration tests
+skip without `TEST_DATABASE_URL`; the HEIC test uses `heif-dec`). `docker build .` produces the
+runtime image (alpine + `libheif-tools`).
 
 ### Building
 ```bash

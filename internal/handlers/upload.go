@@ -89,18 +89,18 @@ func optionalID(r *http.Request, field string) (*int64, error) {
 // UploadReceiptPhoto handles POST /api/v1/uploads
 //
 //	@Summary		Upload a receipt photo
-//	@Description	Stores the image, creates a receipt with status "uploaded" and queues extraction. An identical image (same SHA-256) returns the existing receipt with 200.
+//	@Description	Converts the image to one normalized, metadata-free JPEG (orientation applied, long edge <= 2000 px), stores it, creates a receipt with status "uploaded" and queues extraction. An identical original file (same SHA-256 of the uploaded bytes) returns the existing receipt with 200.
 //	@Tags			uploads
 //	@Accept			multipart/form-data
 //	@Produce		json
-//	@Param			image			formData	file	true	"Receipt photo (image/jpeg or image/png, max 20 MiB)"
+//	@Param			image			formData	file	true	"Receipt photo (JPEG, PNG or HEIC/HEIF, max 20 MiB)"
 //	@Param			uploaded_by_id	formData	int		false	"Member who uploaded the photo"
 //	@Param			member_id		formData	int		false	"Member whose purchase this is"
 //	@Success		202				{object}	models.SuccessResponse{data=models.UploadResult}	"Accepted; extraction queued"
 //	@Success		200				{object}	models.SuccessResponse{data=models.UploadResult}	"Duplicate image; existing receipt"
 //	@Failure		400				{object}	models.ErrorResponse	"Bad request"
 //	@Failure		413				{object}	models.ErrorResponse	"Image too large"
-//	@Failure		415				{object}	models.ErrorResponse	"Unsupported image type (HEIC/HEIF gets guidance to use JPEG)"
+//	@Failure		415				{object}	models.ErrorResponse	"Unsupported image type, or HEIC when the server has no HEIC decoder"
 //	@Failure		500				{object}	models.ErrorResponse	"Internal server error"
 //	@Router			/uploads [post]
 func (h *UploadHandler) UploadReceiptPhoto(w http.ResponseWriter, r *http.Request) {

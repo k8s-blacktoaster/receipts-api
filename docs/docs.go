@@ -186,7 +186,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "Update an existing receipt's information. Omitting \"status\" (or sending the current one)\nkeeps it. Users may only make review moves: parsed -\u003e needs_review|reviewed, needs_review -\u003e reviewed,\nfailed -\u003e reviewed, reviewed -\u003e needs_review. Anything else (e.g. to parsing, failed or uploaded) is 409.\nWhile the receipt is \"parsing\" every PUT is 409. On 409 the receipt is left unchanged.",
+                "description": "Update an existing receipt's information. Omitting \"status\" (or sending the current one)\nkeeps it. Users may only make review moves: parsed -\u003e needs_review|reviewed, needs_review -\u003e reviewed,\nfailed -\u003e reviewed, reviewed -\u003e needs_review. Anything else (e.g. to parsing, failed or uploaded) is 409.\nWhile the receipt is \"uploaded\" (queued) or \"parsing\" every PUT is 409. On 409 the receipt is left unchanged.",
                 "consumes": [
                     "application/json"
                 ],
@@ -235,7 +235,7 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "Invalid status transition, or receipt is being parsed",
+                        "description": "Invalid status transition, or receipt is queued/being extracted",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -284,6 +284,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Receipt not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Receipt is being extracted",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -364,7 +370,7 @@ const docTemplate = `{
         },
         "/uploads": {
             "post": {
-                "description": "Stores the image, creates a receipt with status \"uploaded\" and queues extraction. An identical image (same SHA-256) returns the existing receipt with 200.",
+                "description": "Converts the image to one normalized, metadata-free JPEG (orientation applied, long edge \u003c= 2000 px), stores it, creates a receipt with status \"uploaded\" and queues extraction. An identical original file (same SHA-256 of the uploaded bytes) returns the existing receipt with 200.",
                 "consumes": [
                     "multipart/form-data"
                 ],
@@ -378,7 +384,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "file",
-                        "description": "Receipt photo (image/jpeg or image/png, max 20 MiB)",
+                        "description": "Receipt photo (JPEG, PNG or HEIC/HEIF, max 20 MiB)",
                         "name": "image",
                         "in": "formData",
                         "required": true
@@ -446,7 +452,7 @@ const docTemplate = `{
                         }
                     },
                     "415": {
-                        "description": "Unsupported image type",
+                        "description": "Unsupported image type, or HEIC when the server has no HEIC decoder",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -597,6 +603,10 @@ const docTemplate = `{
                 "store_category": {
                     "type": "string"
                 },
+                "store_city": {
+                    "description": "StoreCity/State/Zip live on the stores row (city, region, postal_code).",
+                    "type": "string"
+                },
                 "store_id": {
                     "type": "integer"
                 },
@@ -608,6 +618,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "store_phone": {
+                    "type": "string"
+                },
+                "store_state": {
+                    "type": "string"
+                },
+                "store_zip": {
                     "type": "string"
                 },
                 "subtotal_cents": {

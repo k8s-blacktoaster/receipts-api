@@ -2,7 +2,7 @@
 
 - [x] **Phase 1: Schema & model hardening** - merchants/stores, line items, products/aliases, members, pipeline status, cents money (merged 2026-10-27, PR #1)
 - [x] **Phase 2: Upload + extraction pipeline** - photo upload, object store, queue, pluggable vision LLM (Grok default), validation
-- [ ] **Phase 3: Mobile web UI** - camera capture, multi-photo, upload status, receipt list, review/edit
+- [x] **Phase 3: Mobile web UI** - camera capture, multi-photo, upload status, receipt list, review/edit
 - [ ] **Phase 4: Normalization & review** - product matching, alias learning, review endpoints
 - [ ] **Phase 5: MCP server** - read-only tools over Streamable HTTP + auth
 - [ ] **Phase 6: Kubernetes deploy & backups** - CNPG, object store, secrets, ingress, restore drill
@@ -37,12 +37,13 @@
 
 ### Phase 3: Mobile web UI
 **Depends on**: Phase 2
-**Requirements**: UI-01..UI-06
+**Requirements**: UI-01..UI-07, ING-09
 **Scope**: camera capture on the phone, upload status, receipt list with parse/review status,
 detail page (image beside fields/items), edit/review/approve, re-extract, member picker,
 merchant rename. Server-rendered html/template + small vanilla JS, embedded with go:embed,
 VPN-only, no chat. Multi-photo receipts deferred (one photo per upload).
 **Plans**: 03-01 (phases/03-web-ui)
+**Status**: Executed on phase-03-web-ui, PR open - see 03-01-SUMMARY.md
 **Success Criteria**: from a phone on VPN, capture -> upload -> see status -> fix a line -> mark reviewed
 
 ### Phase 4: Normalization & review
