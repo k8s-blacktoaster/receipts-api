@@ -18,4 +18,13 @@ the :55434 test DB. go build, go vet, go test ./... green (146 PASS, 0 SKIP). No
 
 ## Open questions (PR)
 See PR description: static bearer vs OAuth 2.1, which statuses count, same server vs separate
-deployment, no session/SSE, where_bought window, search_products vs alias-only.
+deployment, no session/SSE, substring search, spend = receipt totals.
+
+## QA round 1 (PR #5 at 250dc2d) fixes
+- where_bought aggregates per merchant+store in SQL over all purchases (was: oldest 200 rows);
+  test with 250 purchases. Locations list up to 50 receipt ids each (+ receipt_ids_truncated).
+- price_history with a limit returns the newest rows, displayed oldest first.
+- truncated computed by fetching limit+1 rows; spend receipt_ids capped at 100 per group
+  (+ receipt_ids_truncated).
+- Arguments: exact (case-sensitive) keys, NUL bytes and year-0 dates are validation errors.
+- JSON-RPC ids that are null/object/array/bool -> Invalid Request.

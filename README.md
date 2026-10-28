@@ -258,9 +258,11 @@ Read-only [Model Context Protocol](https://modelcontextprotocol.io) tools over S
 | `list_merchants` | - | name, receipt_count, total_spent_cents, last_visit, last_receipt_id |
 | `search_products` | `query`, `limit` | products + last purchase (receipt id/date) |
 | `search_purchases` | `query`, `merchant`, `from`, `to`, `limit` | matching line items, newest first |
-| `where_bought` | `product_id`, `limit` | locations (merchant/store, last date/price, receipt ids) + purchases |
-| `spend` | `merchant`, `from`, `to`, `group_by` (merchant/month) | totals per group with receipt ids |
-| `price_history` | `product_id`, `merchant`, `limit` | unit price per purchase, oldest first |
+| `where_bought` | `product_id`, `limit` | all locations (merchant/store, purchases, last date/price, up to 50 receipt ids) + newest purchases |
+| `spend` | `merchant`, `from`, `to`, `group_by` (merchant/month) | totals per group with up to 100 receipt ids (newest first) |
+| `price_history` | `product_id`, `merchant`, `limit` | the newest `limit` purchases' unit prices, shown oldest first |
+
+Lists say `truncated` / `receipt_ids_truncated` when more rows exist than were returned.
 
 Try it:
 ```bash
