@@ -20,8 +20,12 @@ var ErrNotFound = errors.New("receipt not found")
 // (or the receipt changed status concurrently).
 var ErrInvalidTransition = errors.New("invalid receipt status transition")
 
-// ErrReceiptBusy is returned by Update while the receipt is being parsed (any body).
-var ErrReceiptBusy = errors.New("receipt is being parsed")
+// ErrReceiptBusy is returned by edits while the receipt is queued for or undergoing
+// extraction (uploaded|parsing), and by Delete while parsing.
+var ErrReceiptBusy = errors.New("receipt is queued for or undergoing extraction")
+
+// ErrNoPhoto is returned by RequestReextract for a receipt without a source document.
+var ErrNoPhoto = errors.New("receipt has no photo")
 
 type ReceiptRepository interface {
 	Create(ctx context.Context, receipt *models.Receipt) error
@@ -32,6 +36,10 @@ type ReceiptRepository interface {
 	Count(ctx context.Context) (int, error)
 	// UpdateItem edits one parsed line item during review (marks edited_at).
 	UpdateItem(ctx context.Context, item *models.ReceiptItem) error
+	// RequestReextract moves a photo receipt in parsed|needs_review|failed|uploaded to "uploaded"
+	// (queued), so user edits are refused until the new parse lands. ErrReceiptBusy while
+	// parsing, ErrInvalidTransition for reviewed, ErrNoPhoto, ErrNotFound.
+	RequestReextract(ctx context.Context, id int) error
 	// ListIDsByStatus returns receipt ids in the given statuses, oldest first (worker recovery).
 	ListIDsByStatus(ctx context.Context, statuses ...string) ([]int, error)
 	// ClaimForParsing atomically moves a photo receipt into "parsing" if it is in a
@@ -297,8 +305,8 @@ func (r *receiptRepo) Update(ctx context.Context, receipt *models.Receipt) error
 		}
 		return fmt.Errorf("failed to load receipt status: %w", err)
 	}
-	if current == models.StatusParsing {
-		return ErrReceiptBusy // the worker owns it; its final write would race this edit
+	if models.EditLocked(current) {
+		return ErrReceiptBusy // a queued/running extraction would overwrite this edit
 	}
 	if requested == "" {
 		receipt.Status = current
@@ -353,9 +361,26 @@ func (r *receiptRepo) UpdateItem(ctx context.Context, it *models.ReceiptItem) er
 	if it.LineTotalCents == 0 && it.UnitPriceCents != 0 {
 		it.LineTotalCents = it.ComputedLineTotalCents()
 	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+	var status string
+	err = tx.QueryRowContext(ctx, `SELECT r.status FROM receipts r JOIN receipt_items i ON i.receipt_id = r.id
+		WHERE i.id = $1 FOR UPDATE OF r`, it.ID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("failed to lock receipt: %w", err)
+	}
+	if models.EditLocked(status) {
+		return ErrReceiptBusy
+	}
 	now := time.Now()
 	it.EditedAt = &now
-	err := r.db.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		UPDATE receipt_items SET
 			line_no = $2, raw_text = $3, sku = $4, item_number = $5, upc = $6, product_id = $7, name = $8,
 			description = $9, quantity = $10, unit = $11, unit_price_cents = $12, line_total_cents = $13,
@@ -371,7 +396,7 @@ func (r *receiptRepo) UpdateItem(ctx context.Context, it *models.ReceiptItem) er
 	if err != nil {
 		return fmt.Errorf("failed to update item: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (r *receiptRepo) SetStatus(ctx context.Context, id int, status, parseError string, reviewerID *int64) error {
@@ -492,14 +517,51 @@ func (r *receiptRepo) ResetStaleParsing(ctx context.Context, olderThan time.Dura
 }
 
 func (r *receiptRepo) Delete(ctx context.Context, id int) error {
-	res, err := r.db.ExecContext(ctx, `DELETE FROM receipts WHERE id = $1`, id)
+	// Refused while a worker holds the claim; a queued (uploaded) receipt may be deleted, its
+	// job then finds no claimable row.
+	res, err := r.db.ExecContext(ctx, `DELETE FROM receipts WHERE id = $1 AND status <> 'parsing'`, id)
 	if err != nil {
 		return fmt.Errorf("failed to delete receipt: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
+		var st string
+		if err := r.db.QueryRowContext(ctx, `SELECT status FROM receipts WHERE id = $1`, id).Scan(&st); err == nil {
+			return ErrReceiptBusy
+		}
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (r *receiptRepo) RequestReextract(ctx context.Context, id int) error {
+	var got int
+	err := r.db.QueryRowContext(ctx, `
+		UPDATE receipts SET status = 'uploaded', parse_error = NULL
+		WHERE id = $1 AND source_document_id IS NOT NULL
+		  AND status IN ('uploaded','parsed','needs_review','failed')
+		RETURNING id`, id).Scan(&got)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("failed to request re-extract: %w", err)
+	}
+	var st string
+	var doc sql.NullInt64
+	if err := r.db.QueryRowContext(ctx, `SELECT status, source_document_id FROM receipts WHERE id = $1`, id).Scan(&st, &doc); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	switch {
+	case !doc.Valid:
+		return ErrNoPhoto
+	case st == models.StatusParsing:
+		return ErrReceiptBusy
+	default:
+		return fmt.Errorf("%w: %s -> uploaded", ErrInvalidTransition, st)
+	}
 }
 
 func (r *receiptRepo) List(ctx context.Context, limit, offset int) ([]*models.Receipt, error) {

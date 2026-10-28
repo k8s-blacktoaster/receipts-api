@@ -22,7 +22,7 @@ type statusRepo struct {
 }
 
 func (s *statusRepo) Update(_ context.Context, r *models.Receipt) error {
-	if s.status == models.StatusParsing {
+	if models.EditLocked(s.status) {
 		return repository.ErrReceiptBusy
 	}
 	if r.Status == "" {
@@ -59,14 +59,36 @@ func TestUpdateReceiptStatusTransitions(t *testing.T) {
 		if rec.Code != c.code || repo.status != c.want {
 			t.Errorf("%s%s: code=%d status=%s body=%s", c.from, c.body, rec.Code, repo.status, rec.Body)
 		}
-		if c.from == models.StatusParsing {
-			if !strings.Contains(rec.Body.String(), "being parsed") || repo.updates != 0 {
+		if models.EditLocked(c.from) {
+			if !strings.Contains(rec.Body.String(), "being extracted") || repo.updates != 0 {
 				t.Errorf("busy 409: %s", rec.Body)
 			}
 			continue
 		}
 		if c.code == 409 && !strings.Contains(rec.Body.String(), "Invalid status transition from "+c.from+" to ") {
 			t.Errorf("409 message unclear: %s", rec.Body)
+		}
+	}
+}
+
+func (s *statusRepo) Delete(_ context.Context, id int) error {
+	if s.status == models.StatusParsing {
+		return repository.ErrReceiptBusy
+	}
+	s.status = "deleted"
+	return nil
+}
+
+func TestDeleteReceiptWhileParsing(t *testing.T) {
+	for st, want := range map[string]int{models.StatusParsing: 409, models.StatusUploaded: 204, models.StatusParsed: 204} {
+		repo := &statusRepo{status: st}
+		h := NewReceiptHandler(repo, slog.Default())
+		r := chi.NewRouter()
+		r.Delete("/api/v1/receipts/{id}", h.DeleteReceipt)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/receipts/5", nil))
+		if rec.Code != want {
+			t.Errorf("delete while %s: %d %s", st, rec.Code, rec.Body)
 		}
 	}
 }

@@ -219,7 +219,7 @@ func TestPutWhileParsingIsRefused(t *testing.T) {
 		`{"store_name":"Hand Edit","date":"2026-10-01","status":"reviewed"}`,
 		`{"store_name":"Hand Edit","date":"2026-10-01","status":"parsing"}`,
 	} {
-		if rec := a.call(http.MethodPut, path, body); rec.Code != 409 || !strings.Contains(rec.Body.String(), "being parsed") {
+		if rec := a.call(http.MethodPut, path, body); rec.Code != 409 || !strings.Contains(rec.Body.String(), "being extracted") {
 			t.Fatalf("PUT while parsing %s: %d %s", body, rec.Code, rec.Body)
 		}
 	}

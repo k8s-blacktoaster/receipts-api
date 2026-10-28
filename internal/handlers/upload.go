@@ -58,6 +58,23 @@ type UploadStore interface {
 // ReceiptLookup is used by the re-extract endpoint.
 type ReceiptLookup interface {
 	GetByID(ctx context.Context, id int) (*models.Receipt, error)
+	RequestReextract(ctx context.Context, id int) error
+}
+
+// ReextractError maps a RequestReextract error to an HTTP status and message (shared with the web UI).
+func ReextractError(err error) (int, string) {
+	switch {
+	case errors.Is(err, repository.ErrNotFound):
+		return http.StatusNotFound, "Receipt not found"
+	case errors.Is(err, repository.ErrNoPhoto):
+		return http.StatusBadRequest, "Receipt has no photo"
+	case errors.Is(err, repository.ErrReceiptBusy):
+		return http.StatusConflict, "Extraction already in progress"
+	case errors.Is(err, repository.ErrInvalidTransition):
+		return http.StatusConflict, "Receipt is reviewed; re-extraction is not allowed (v1 has no force option)"
+	default:
+		return http.StatusInternalServerError, "Failed to queue extraction"
+	}
 }
 
 type UploadHandler struct {
@@ -279,7 +296,13 @@ func (h *UploadHandler) ReextractReceipt(w http.ResponseWriter, r *http.Request)
 		h.respond(w, http.StatusServiceUnavailable, "Extraction disabled", nil)
 		return
 	}
+	// Move to "uploaded" first: from here on edits are refused (409) until the new parse lands.
+	if err := h.Receipts.RequestReextract(r.Context(), id); err != nil {
+		code, msg := ReextractError(err)
+		h.respond(w, code, msg, nil)
+		return
+	}
 	h.Queue.Enqueue(id)
 	h.respond(w, http.StatusAccepted, "Extraction queued",
-		models.UploadResult{ReceiptID: id, SourceDocumentID: *rc.SourceDocumentID, Status: rc.Status})
+		models.UploadResult{ReceiptID: id, SourceDocumentID: *rc.SourceDocumentID, Status: models.StatusUploaded})
 }

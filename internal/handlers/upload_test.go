@@ -69,6 +69,20 @@ func (q *fakeQueue) Enqueue(id int) bool { q.ids = append(q.ids, id); return tru
 
 type fakeLookup struct{ r *models.Receipt }
 
+func (f fakeLookup) RequestReextract(_ context.Context, id int) error {
+	if f.r == nil || f.r.ID != id {
+		return repository.ErrNotFound
+	}
+	switch f.r.Status {
+	case models.StatusParsing:
+		return repository.ErrReceiptBusy
+	case models.StatusReviewed:
+		return repository.ErrInvalidTransition
+	}
+	f.r.Status = models.StatusUploaded
+	return nil
+}
+
 func (f fakeLookup) GetByID(_ context.Context, id int) (*models.Receipt, error) {
 	if f.r == nil || f.r.ID != id {
 		return nil, repository.ErrNotFound

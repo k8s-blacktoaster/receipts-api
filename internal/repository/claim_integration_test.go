@@ -174,8 +174,8 @@ func TestClaimForParsingIsAtomic(t *testing.T) {
 	}
 
 	// transition table enforced in SetStatus
-	if err := receipts.SetStatus(ctx, rc.ID, models.StatusUploaded, "", nil); !errors.Is(err, repository.ErrInvalidTransition) {
-		t.Fatalf("parsed -> uploaded should be invalid: %v", err)
+	if err := receipts.SetStatus(ctx, rc.ID, models.StatusFailed, "", nil); !errors.Is(err, repository.ErrInvalidTransition) {
+		t.Fatalf("parsed -> failed should be invalid: %v", err)
 	}
 	if err := receipts.SetStatus(ctx, 999999, models.StatusParsed, "", nil); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("missing receipt: %v", err)

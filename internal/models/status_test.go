@@ -8,7 +8,7 @@ import (
 func TestStatusTransitions(t *testing.T) {
 	ok := [][2]string{{"uploaded", "parsing"}, {"parsing", "parsed"}, {"parsing", "needs_review"}, {"parsing", "failed"},
 		{"failed", "parsing"}, {"parsed", "reviewed"}, {"reviewed", "needs_review"}, {"parsing", "uploaded"}}
-	bad := [][2]string{{"uploaded", "parsed"}, {"parsing", "parsing"}, {"reviewed", "parsing"}, {"parsed", "uploaded"},
+	bad := [][2]string{{"uploaded", "parsed"}, {"parsing", "parsing"}, {"reviewed", "parsing"}, {"reviewed", "uploaded"},
 		{"uploaded", "reviewed"}, {"x", "parsed"}, {"parsed", "bogus"}}
 	for _, c := range ok {
 		if !CanTransition(c[0], c[1]) {
@@ -47,5 +47,19 @@ func TestUserTransitions(t *testing.T) {
 				t.Errorf("user edge %s -> %s missing from the full table", from, to)
 			}
 		}
+	}
+}
+
+func TestEditLocked(t *testing.T) {
+	for st, want := range map[string]bool{"uploaded": true, "parsing": true, "parsed": false, "needs_review": false, "failed": false, "reviewed": false} {
+		if EditLocked(st) != want {
+			t.Errorf("EditLocked(%s) != %v", st, want)
+		}
+	}
+	if !CanTransition("parsed", "uploaded") || !CanTransition("needs_review", "uploaded") || CanTransition("reviewed", "uploaded") {
+		t.Fatal("re-extract request edges")
+	}
+	if UserCanTransition("parsed", "uploaded") {
+		t.Fatal("users must not request uploaded directly via PUT")
 	}
 }
