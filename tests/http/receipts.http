@@ -14,14 +14,18 @@ Content-Type: application/json
   "store_address": "26736 Portola Parkway Suite 6-C, Foothill Ranch, CA 92610",
   "store_phone": "(949) 382-1982",
   "date": "2024-08-25",
-  "subtotal": 19.00,
+  "source": "manual",
+  "status": "reviewed",
+  "subtotal_cents": 1900,
+  "tax_cents": 0,
+  "savings_cents": 0,
   "items": [
     {
       "sku": "2380749",
       "name": "OS EYE PENCIL BOHIAS BLK",
       "description": "12HR Contour Eye Pencil Eyeliner in Bodacious Black - waterproof gel eyeliner pencil",
       "quantity": 1,
-      "unit_price": 19.00
+      "unit_price_cents": 1900
     }
   ]
 }
@@ -31,38 +35,231 @@ POST {{base_url}}/api/v1/receipts
 Content-Type: application/json
 
 {
-  "store_name": "Target",
-  "store_category": "Retail",
-  "store_address": "123 Main St, Anytown, CA 90210",
-  "store_phone": "(555) 123-4567",
-  "date": "2024-08-26",
-  "subtotal": 45.99,
+  "store_name": "Sprouts Farmers Market",
+  "store_category": "Grocery",
+  "store_address": "27769 Santa Margarita Parkway, Mission Viejo, CA 92691",
+  "store_phone": "(949) 582-3003",
+  "date": "2025-08-10",
+  "subtotal_cents": 20800,
   "items": [
     {
-      "sku": "TARGET001",
-      "name": "Household Cleaner",
-      "description": "Multi-purpose household cleaning spray",
-      "quantity": 2,
-      "unit_price": 12.99
+      "sku": "CUCUMBERS",
+      "name": "CUCUMBERS",
+      "description": "Cucumbers",
+      "quantity": 1,
+      "unit_price_cents": 198
     },
     {
-      "sku": "TARGET002", 
-      "name": "Paper Towels",
-      "description": "6-pack premium paper towels",
+      "sku": "ORG 2 LB CARROTS",
+      "name": "ORG 2 LB CARROTS",
+      "description": "Organic 2 lb Carrots",
       "quantity": 1,
-      "unit_price": 19.99
+      "unit_price_cents": 299
+    },
+    {
+      "sku": "ORG FUJI APPLES",
+      "name": "ORG FUJI APPLES",
+      "description": "Organic Fuji Apples",
+      "quantity": 1,
+      "unit_price_cents": 469
+    },
+    {
+      "sku": "ORG MED AVOCADO B",
+      "name": "ORG MED AVOCADO B",
+      "description": "Organic Medium Avocado Bag",
+      "quantity": 1,
+      "unit_price_cents": 699
+    },
+    {
+      "sku": "ORG MED AVOCADO B",
+      "name": "ORG MED AVOCADO B",
+      "description": "Organic Medium Avocado Bag",
+      "quantity": 1,
+      "unit_price_cents": 349
+    },
+    {
+      "sku": "ORG MED AVOCADO BAG",
+      "name": "ORG MED AVOCADO BAG",
+      "description": "Organic Medium Avocado Bag",
+      "quantity": 1,
+      "unit_price_cents": 699
+    },
+    {
+      "sku": "ORGANIC CELERY STALK",
+      "name": "ORGANIC CELERY STALK",
+      "description": "Organic Celery Stalk",
+      "quantity": 1,
+      "unit_price_cents": 299
+    },
+    {
+      "sku": "ORG PINK SLT POPCORN",
+      "name": "ORG PINK SLT POPCORN",
+      "description": "Organic Pink Salt Popcorn",
+      "quantity": 1,
+      "unit_price_cents": 1098
+    },
+    {
+      "sku": "ORG 2% RF MILK",
+      "name": "ORG 2% RF MILK",
+      "description": "Organic 2% Reduced Fat Milk",
+      "quantity": 1,
+      "unit_price_cents": 699
+    },
+    {
+      "sku": "ORG LRG GRADE A EGGS",
+      "name": "ORG LRG GRADE A EGGS",
+      "description": "Organic Large Grade A Eggs",
+      "quantity": 1,
+      "unit_price_cents": 1199
+    },
+    {
+      "sku": "ORG STRING CHEESE",
+      "name": "ORG STRING CHEESE",
+      "description": "Organic String Cheese",
+      "quantity": 1,
+      "unit_price_cents": 729
+    },
+    {
+      "sku": "PROVOLONE CHEESE",
+      "name": "PROVOLONE CHEESE",
+      "description": "Provolone Cheese",
+      "quantity": 1,
+      "unit_price_cents": 649
+    },
+    {
+      "sku": "FLAT IRON GRASSFED",
+      "name": "FLAT IRON GRASSFED",
+      "description": "Flat Iron Grass Fed Beef",
+      "quantity": 4,
+      "unit_price_cents": 1504
+    },
+    {
+      "sku": "ORG UNCURED BACON",
+      "name": "ORG UNCURED BACON",
+      "description": "Organic Uncured Bacon",
+      "quantity": 2,
+      "unit_price_cents": 929
+    },
+    {
+      "sku": "BLSL CHICKEN THIGHS",
+      "name": "BLSL CHICKEN THIGHS",
+      "description": "Boneless Chicken Thighs",
+      "quantity": 2,
+      "unit_price_cents": 961
+    },
+    {
+      "sku": "SAN FRAN SOURDOUGH",
+      "name": "SAN FRAN SOURDOUGH",
+      "description": "San Francisco Sourdough",
+      "quantity": 1,
+      "unit_price_cents": 699
+    },
+    {
+      "sku": "ORGANIC POTATO TOTS",
+      "name": "ORGANIC POTATO TOTS",
+      "description": "Organic Potato Tots",
+      "quantity": 1,
+      "unit_price_cents": 1299
+    },
+    {
+      "sku": "MOISTURE SHAMPOO",
+      "name": "MOISTURE SHAMPOO",
+      "description": "Moisture Shampoo",
+      "quantity": 1,
+      "unit_price_cents": 1119
     }
   ]
 }
 
 ### Get all receipts
-GET {{base_url}}/api/v1/receipts
+GET {{base_url}}/api/v1/receipts?limit=20&offset=0
 
 ### Get a specific receipt by ID (replace {id} with actual ID from creation)
 GET {{base_url}}/api/v1/receipts/1
 
 ### Get another receipt by ID
 GET {{base_url}}/api/v1/receipts/2
+
+### Photo-pipeline receipt with item_number/upc, discounts, adjustments
+# status: uploaded | parsing | parsed | needs_review | reviewed | failed
+# source: photo | manual. All money is integer cents.
+POST {{base_url}}/api/v1/receipts
+Content-Type: application/json
+
+{
+  "store_name": "Example Warehouse",
+  "store_number": "0481",
+  "store_address": "100 Example Way, Irvine, CA 92618",
+  "date": "2025-09-14",
+  "subtotal_cents": 4497,
+  "tax_cents": 196,
+  "total_cents": 4193,
+  "savings_cents": 500,
+  "currency": "USD",
+  "payment_method": "visa",
+  "payment_last4": "0000",
+  "source": "photo",
+  "external_id": "photo-sample-001",
+  "status": "needs_review",
+  "confidence": 0.82,
+  "items": [
+    {
+      "line_no": 1,
+      "raw_text": "1234567 KS PAPER TOWEL",
+      "item_number": "1234567",
+      "upc": "096619000000",
+      "name": "PAPER TOWEL",
+      "quantity": 1,
+      "unit_price_cents": 2299,
+      "discount_cents": 500,
+      "tax_flag": "A",
+      "taxable": true
+    },
+    {
+      "line_no": 2,
+      "sku": "BANANAS",
+      "name": "BANANAS",
+      "quantity": 2.5,
+      "unit": "lb",
+      "unit_price_cents": 88,
+      "line_total_cents": 220
+    },
+    {
+      "line_no": 3,
+      "name": "OLIVE OIL",
+      "quantity": 1,
+      "unit_price_cents": 1978
+    }
+  ],
+  "adjustments": [
+    { "kind": "coupon", "raw_text": "MFR COUPON", "amount_cents": -500 }
+  ]
+}
+
+### Update a receipt (mark reviewed)
+PUT {{base_url}}/api/v1/receipts/2
+Content-Type: application/json
+
+{
+  "store_name": "Sprouts Farmers Market",
+  "store_category": "Grocery",
+  "date": "2025-08-10",
+  "subtotal_cents": 20800,
+  "tax_cents": 0,
+  "status": "reviewed",
+  "items": [
+    { "sku": "CUCUMBERS", "name": "CUCUMBERS", "quantity": 1, "unit_price_cents": 198 }
+  ]
+}
+
+### Validation error: invalid status (expect 400)
+POST {{base_url}}/api/v1/receipts
+Content-Type: application/json
+
+{ "store_name": "Sephora", "date": "2024-08-25", "subtotal_cents": 1900, "status": "auto" }
+
+### Swagger docs
+GET {{base_url}}/swagger/doc.json
 
 ### Delete a receipt (replace {id} with actual ID)
 DELETE {{base_url}}/api/v1/receipts/1
