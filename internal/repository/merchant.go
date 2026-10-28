@@ -33,6 +33,26 @@ type MerchantRepository interface {
 	// Rename sets name = NormalizeMerchantName(newName). Same key is a no-op; a key owned by
 	// another merchant returns *MerchantConflict (errors.Is ErrMerchantNameTaken).
 	Rename(ctx context.Context, id int64, newName string) (*models.Merchant, error)
+	// Merge moves everything from merchant `from` into `into` and deletes `from` (NORM-03):
+	// receipts; stores (a store matching one of into's by number or address is folded into it);
+	// aliases (a text collision keeps into's alias; an item-number collision keeps the moved
+	// alias with item_number cleared). Refused (ErrReceiptBusy) while any of from's receipts is
+	// uploaded/parsing.
+	Merge(ctx context.Context, from, into int64) (*MergeResult, error)
+}
+
+// ErrSelfMerge: a merchant cannot be merged into itself.
+var ErrSelfMerge = errors.New("cannot merge a merchant into itself")
+
+// MergeResult reports what a merchant merge moved.
+type MergeResult struct {
+	Into               models.Merchant `json:"into"`
+	Receipts           int             `json:"receipts"`
+	StoresMoved        int             `json:"stores_moved"`
+	StoresFolded       int             `json:"stores_folded"`
+	AliasesMoved       int             `json:"aliases_moved"`
+	AliasesDropped     int             `json:"aliases_dropped"`      // same text already on `into`
+	ItemNumbersCleared int             `json:"item_numbers_cleared"` // kept, item_number collided
 }
 
 type merchantRepo struct{ db *database.DB }
@@ -98,4 +118,92 @@ func (r *merchantRepo) Rename(ctx context.Context, id int64, newName string) (*m
 		return nil, fmt.Errorf("failed to rename merchant: %w", err)
 	}
 	return r.GetByID(ctx, id)
+}
+
+func (r *merchantRepo) Merge(ctx context.Context, from, into int64) (*MergeResult, error) {
+	if from == into {
+		return nil, ErrSelfMerge
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM (SELECT id FROM merchants WHERE id IN ($1,$2) ORDER BY id FOR UPDATE) m`, from, into).Scan(&n); err != nil {
+		return nil, fmt.Errorf("failed to lock merchants: %w", err)
+	}
+	if n != 2 {
+		return nil, ErrNotFound
+	}
+	var busy bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM receipts WHERE merchant_id = $1 AND status IN ('uploaded','parsing'))`, from).Scan(&busy); err != nil {
+		return nil, err
+	}
+	if busy {
+		return nil, ErrReceiptBusy
+	}
+	res := &MergeResult{}
+	exec := func(q string, args ...any) (int, error) {
+		out, err := tx.ExecContext(ctx, q, args...)
+		if err != nil {
+			return 0, fmt.Errorf("merge: %w", err)
+		}
+		c, _ := out.RowsAffected()
+		return int(c), nil
+	}
+	// Stores: fold a from-store into the into-store with the same number, else the same address.
+	if _, err := exec(`CREATE TEMP TABLE _fold ON COMMIT DROP AS
+		SELECT s.id, coalesce(
+			(SELECT t.id FROM stores t WHERE t.merchant_id = $2 AND s.store_number IS NOT NULL AND t.store_number = s.store_number),
+			(SELECT t.id FROM stores t WHERE t.merchant_id = $2 AND s.address IS NOT NULL AND lower(t.address) = lower(s.address))) AS keep
+		FROM stores s WHERE s.merchant_id = $1`, from, into); err != nil {
+		return nil, err
+	}
+	// receipts reference stores by (store_id, merchant_id): detach, move, re-attach.
+	if _, err := exec(`CREATE TEMP TABLE _rs ON COMMIT DROP AS
+		SELECT r.id, coalesce(f.keep, r.store_id) AS store_id FROM receipts r
+		LEFT JOIN _fold f ON f.id = r.store_id WHERE r.merchant_id = $1 AND r.store_id IS NOT NULL`, from); err != nil {
+		return nil, err
+	}
+	if _, err := exec(`UPDATE receipts SET store_id = NULL WHERE id IN (SELECT id FROM _rs)`); err != nil {
+		return nil, err
+	}
+	if res.StoresFolded, err = exec(`DELETE FROM stores s USING _fold f WHERE s.id = f.id AND f.keep IS NOT NULL`); err != nil {
+		return nil, err
+	}
+	if res.StoresMoved, err = exec(`UPDATE stores SET merchant_id = $2 WHERE merchant_id = $1`, from, into); err != nil {
+		return nil, err
+	}
+	// Aliases.
+	if res.AliasesDropped, err = exec(`DELETE FROM product_aliases a USING product_aliases k
+		WHERE a.merchant_id = $1 AND k.merchant_id = $2 AND lower(k.alias_text) = lower(a.alias_text)`, from, into); err != nil {
+		return nil, err
+	}
+	if res.ItemNumbersCleared, err = exec(`UPDATE product_aliases a SET item_number = NULL
+		WHERE a.merchant_id = $1 AND a.item_number IS NOT NULL
+		  AND EXISTS (SELECT 1 FROM product_aliases k WHERE k.merchant_id = $2 AND k.item_number = a.item_number)`, from, into); err != nil {
+		return nil, err
+	}
+	if res.AliasesMoved, err = exec(`UPDATE product_aliases SET merchant_id = $2 WHERE merchant_id = $1`, from, into); err != nil {
+		return nil, err
+	}
+	if res.Receipts, err = exec(`UPDATE receipts SET merchant_id = $2, updated_at = now() WHERE merchant_id = $1`, from, into); err != nil {
+		return nil, err
+	}
+	if _, err := exec(`UPDATE receipts r SET store_id = x.store_id FROM _rs x WHERE x.id = r.id`); err != nil {
+		return nil, err
+	}
+	if _, err := exec(`DELETE FROM merchants WHERE id = $1`, from); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit merge: %w", err)
+	}
+	m, err := r.GetByID(ctx, into)
+	if err != nil {
+		return nil, err
+	}
+	res.Into = *m
+	return res, nil
 }

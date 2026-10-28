@@ -1,0 +1,91 @@
+package repository
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"receipts-db/internal/models"
+)
+
+func TestMerchantMerge(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	receipts, merchants, products := NewReceiptRepository(db), NewMerchantRepository(db), NewProductRepository(db)
+	mk := func(name, num, addr string) *models.Receipt {
+		r := &models.Receipt{StoreName: name, StoreNumber: num, StoreAddress: addr, Date: "2026-04-01",
+			Source: models.SourceManual, Items: []models.ReceiptItem{{Name: "x", Quantity: 1}}}
+		if err := receipts.Create(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	into := mk("Corner Market", "12", "1 Elm St")
+	from1 := mk("Corner Mkt", "12", "")         // same store number -> folded
+	from2 := mk("Corner Mkt", "", "1 ELM ST")   // same address -> folded
+	from3 := mk("Corner Mkt", "40", "9 Oak Rd") // new store -> moved
+	p := &models.Product{CanonicalName: "Bread"}
+	q := &models.Product{CanonicalName: "Rolls"}
+	_ = products.CreateProduct(ctx, p)
+	_ = products.CreateProduct(ctx, q)
+	for _, a := range []models.ProductAlias{
+		{ProductID: p.ID, MerchantID: into.MerchantID, AliasText: "BREAD", ItemNumber: "77"},
+		{ProductID: p.ID, MerchantID: from1.MerchantID, AliasText: "bread"},                          // text collision -> dropped
+		{ProductID: q.ID, MerchantID: from1.MerchantID, AliasText: "DINNER ROLLS", ItemNumber: "77"}, // number collision -> kept, cleared
+		{ProductID: q.ID, MerchantID: from1.MerchantID, AliasText: "ROLLS 6CT", ItemNumber: "78"},    // moved intact
+	} {
+		a := a
+		if err := products.UpsertAlias(ctx, &a); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := merchants.Merge(ctx, into.MerchantID, into.MerchantID); !errors.Is(err, ErrSelfMerge) {
+		t.Fatalf("self merge: %v", err)
+	}
+	if _, err := merchants.Merge(ctx, 99999, into.MerchantID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE receipts SET status = 'parsing' WHERE id = $1`, from3.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := merchants.Merge(ctx, from1.MerchantID, into.MerchantID); !errors.Is(err, ErrReceiptBusy) {
+		t.Fatalf("busy: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE receipts SET status = 'reviewed' WHERE id = $1`, from3.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := merchants.Merge(ctx, from1.MerchantID, into.MerchantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Receipts != 3 || res.StoresFolded != 2 || res.StoresMoved != 1 || res.AliasesDropped != 1 ||
+		res.ItemNumbersCleared != 1 || res.AliasesMoved != 2 || res.Into.ReceiptCount != 4 {
+		t.Fatalf("result %+v", res)
+	}
+	if _, err := merchants.GetByID(ctx, from1.MerchantID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("source merchant not deleted: %v", err)
+	}
+	for _, r := range []*models.Receipt{from1, from2} {
+		got, _ := receipts.GetByID(ctx, r.ID)
+		if got.MerchantID != into.MerchantID || got.StoreID == nil || *got.StoreID != *into.StoreID {
+			t.Errorf("receipt %d: merchant %d store %v", r.ID, got.MerchantID, got.StoreID)
+		}
+	}
+	var cleared int
+	_ = db.QueryRowContext(ctx, `SELECT count(*) FROM product_aliases WHERE alias_text = 'DINNER ROLLS' AND item_number IS NULL AND merchant_id = $1`, into.MerchantID).Scan(&cleared)
+	if cleared != 1 {
+		t.Fatalf("colliding alias not kept with item_number cleared")
+	}
+	// The kept alias still maps by text on the merged merchant; 77 still maps to into's product.
+	r := mk("Corner Market", "", "")
+	r.Items = []models.ReceiptItem{{Name: "dinner rolls", Quantity: 1}, {Name: "?", ItemNumber: "77", Quantity: 1}}
+	if err := receipts.Update(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := receipts.GetByID(ctx, r.ID)
+	if got.Items[0].ProductID == nil || *got.Items[0].ProductID != q.ID || got.Items[1].ProductID == nil || *got.Items[1].ProductID != p.ID {
+		t.Fatalf("post-merge mapping: %+v", got.Items)
+	}
+}
