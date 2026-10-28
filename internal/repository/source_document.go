@@ -71,7 +71,16 @@ func (r *sourceDocRepo) CreateUpload(ctx context.Context, doc *models.SourceDocu
 	if err := tx.QueryRowContext(ctx, `
 		INSERT INTO source_documents (kind, object_key, sha256, mime_type, uploaded_by_id, parse_state,
 			jpeg_sha256, original_object_key, original_mime_type, image_width, image_height)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, 0), NULLIF($11, 0)) RETURNING id, created_at`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, 0), NULLIF($11, 0))
+		-- a document left behind by a deleted receipt (same original sha256) is reused, not a 500
+		ON CONFLICT (sha256) DO UPDATE SET kind = EXCLUDED.kind, object_key = EXCLUDED.object_key,
+			mime_type = EXCLUDED.mime_type, uploaded_by_id = EXCLUDED.uploaded_by_id, parse_state = EXCLUDED.parse_state,
+			jpeg_sha256 = EXCLUDED.jpeg_sha256, original_object_key = EXCLUDED.original_object_key,
+			original_mime_type = EXCLUDED.original_mime_type, image_width = EXCLUDED.image_width,
+			image_height = EXCLUDED.image_height, raw_extraction = NULL, model = NULL, prompt_version = NULL,
+			error = NULL, parsed_at = NULL
+		WHERE NOT EXISTS (SELECT 1 FROM receipts WHERE receipts.source_document_id = source_documents.id)
+		RETURNING id, created_at`,
 		doc.Kind, nullStr(doc.ObjectKey), doc.SHA256, nullStr(doc.MimeType), doc.UploadedByID, doc.ParseState,
 		doc.JPEGSHA256, nullStr(doc.OriginalObjectKey), nullStr(doc.OriginalMimeType), doc.Width, doc.Height,
 	).Scan(&doc.ID, &doc.CreatedAt); err != nil {
