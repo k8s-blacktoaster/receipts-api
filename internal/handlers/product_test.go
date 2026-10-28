@@ -102,7 +102,7 @@ func TestProductAndQueueEndpoints(t *testing.T) {
 		want               string
 	}{
 		{"GET", "/products?q=milk", "", 200, `"canonical_name":"milk"`},
-		{"POST", "/products", `{"canonical_name":"Milk","upc":"012"}`, 201, `"id":100`},
+		{"POST", "/products", `{"canonical_name":"Milk","upc":"012345678905"}`, 201, `"id":100`},
 		{"POST", "/products", `{"brand":"x"}`, 400, "canonical_name"},
 		{"GET", "/review?limit=999", "", 200, `"total":7`},
 	} {
@@ -111,5 +111,20 @@ func TestProductAndQueueEndpoints(t *testing.T) {
 		if rec.Code != c.code || !strings.Contains(rec.Body.String(), c.want) {
 			t.Errorf("%s %s: %d %s", c.method, c.path, rec.Code, rec.Body)
 		}
+	}
+}
+
+func TestUPCRejectedAtAPI(t *testing.T) {
+	rec := httptest.NewRecorder()
+	productRouter(&fakeProducts{}).ServeHTTP(rec, httptest.NewRequest("POST", "/products", strings.NewReader(`{"canonical_name":"Milk","upc":"123"}`)))
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "8, 12, 13 or 14") {
+		t.Fatalf("product: %d %s", rec.Code, rec.Body)
+	}
+	h := NewReceiptHandler(&statusRepo{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	rec = httptest.NewRecorder()
+	h.CreateReceipt(rec, httptest.NewRequest("POST", "/api/v1/receipts", strings.NewReader(
+		`{"store_name":"Acme","date":"2026-01-02","items":[{"name":"x","quantity":1,"upc":"12ab5678"}]}`)))
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "UPC") {
+		t.Fatalf("receipt: %d %s", rec.Code, rec.Body)
 	}
 }

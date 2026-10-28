@@ -204,6 +204,11 @@ func (r *merchantRepo) Merge(ctx context.Context, from, into int64) (*MergeResul
 		  AND EXISTS (SELECT 1 FROM product_aliases k WHERE k.merchant_id = $2 AND k.item_number = a.item_number)`, from, into); err != nil {
 		return nil, err
 	}
+	if _, err = exec(`UPDATE product_aliases a SET upc = NULL
+		WHERE a.merchant_id = $1 AND a.upc IS NOT NULL
+		  AND EXISTS (SELECT 1 FROM product_aliases k WHERE k.merchant_id = $2 AND k.upc = a.upc)`, from, into); err != nil {
+		return nil, err
+	}
 	if res.AliasesMoved, err = exec(`UPDATE product_aliases SET merchant_id = $2 WHERE merchant_id = $1`, from, into); err != nil {
 		return nil, err
 	}

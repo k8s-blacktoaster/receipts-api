@@ -142,11 +142,11 @@ func (r *productRepo) MapItem(ctx context.Context, itemID, productID int64, newP
 	var status string
 	var merchantID sql.NullInt64
 	var it models.ReceiptItem
-	var raw, itemNo sql.NullString
+	var raw, itemNo, upc sql.NullString
 	err = tx.QueryRowContext(ctx, `
-		SELECT r.status, r.merchant_id, coalesce(i.raw_text, ''), i.name, coalesce(i.item_number, '')
+		SELECT r.status, r.merchant_id, coalesce(i.raw_text, ''), i.name, coalesce(i.item_number, ''), i.upc
 		FROM receipt_items i JOIN receipts r ON r.id = i.receipt_id
-		WHERE i.id = $1 FOR UPDATE OF r, i`, itemID).Scan(&status, &merchantID, &raw, &it.Name, &itemNo)
+		WHERE i.id = $1 FOR UPDATE OF r, i`, itemID).Scan(&status, &merchantID, &raw, &it.Name, &itemNo, &upc)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -157,6 +157,9 @@ func (r *productRepo) MapItem(ctx context.Context, itemID, productID int64, newP
 		return nil, ErrReceiptBusy
 	}
 	it.RawText, it.ItemNumber = raw.String, strings.TrimSpace(itemNo.String)
+	if models.ValidUPC(strings.TrimSpace(upc.String)) {
+		it.UPC = strings.TrimSpace(upc.String)
+	}
 	if newProduct != nil {
 		if err := insertProduct(ctx, tx, newProduct); err != nil {
 			return nil, err
@@ -183,17 +186,21 @@ func (r *productRepo) MapItem(ctx context.Context, itemID, productID int64, newP
 		if res.AliasID, err = learnAlias(ctx, tx, merchantID.Int64, text, it.ItemNumber, productID); err != nil {
 			return nil, err
 		}
+		if err := learnUPC(ctx, tx, merchantID.Int64, res.AliasID, it.UPC, productID); err != nil {
+			return nil, err
+		}
 		// Reuse it right away on the merchant's other unmapped lines.
 		n, err := tx.ExecContext(ctx, `
 			UPDATE receipt_items ri SET product_id = $2,
-			       match_source = CASE WHEN $3 <> '' AND ri.item_number = $3 THEN 'item_number' ELSE 'exact' END,
+			       match_source = CASE WHEN $3 <> '' AND ri.item_number = $3 THEN 'item_number'
+			                           WHEN $5 <> '' AND ri.upc = $5 THEN 'upc' ELSE 'exact' END,
 			       match_confidence = 1, suggested_product_id = NULL, updated_at = now()
 			FROM receipts r
 			WHERE r.id = ri.receipt_id AND r.merchant_id = $1 AND ri.product_id IS NULL
 			  AND r.status NOT IN ('uploaded','parsing')
-			  AND (($3 <> '' AND ri.item_number = $3)
+			  AND (($3 <> '' AND ri.item_number = $3) OR ($5 <> '' AND ri.upc = $5)
 			       OR lower(coalesce(nullif(btrim(ri.raw_text), ''), btrim(ri.name))) = lower($4))`,
-			merchantID.Int64, productID, it.ItemNumber, text)
+			merchantID.Int64, productID, it.ItemNumber, text, it.UPC)
 		if err != nil {
 			return nil, fmt.Errorf("failed to apply alias: %w", err)
 		}
@@ -204,6 +211,26 @@ func (r *productRepo) MapItem(ctx context.Context, itemID, productID int64, newP
 		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
 	return res, nil
+}
+
+// learnUPC records a line's UPC for the merchant: an alias that already owns the UPC is
+// re-pointed to the product; otherwise the UPC goes on the learned alias if it has none.
+func learnUPC(ctx context.Context, q txExec, merchantID, aliasID int64, upc string, productID int64) error {
+	if upc == "" {
+		return nil
+	}
+	res, err := q.ExecContext(ctx, `UPDATE product_aliases SET product_id = $3, source = 'manual', confidence = 1
+		WHERE merchant_id = $1 AND upc = $2`, merchantID, upc, productID)
+	if err != nil {
+		return fmt.Errorf("learn upc: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	if _, err := q.ExecContext(ctx, `UPDATE product_aliases SET upc = $2 WHERE id = $1 AND upc IS NULL`, aliasID, upc); err != nil {
+		return fmt.Errorf("learn upc: %w", err)
+	}
+	return nil
 }
 
 // learnAlias records (merchant, text[, item number]) -> product as a manual alias, respecting
@@ -269,14 +296,15 @@ func (r *productRepo) UpsertAlias(ctx context.Context, a *models.ProductAlias) e
 		a.Source = "manual"
 	}
 	err := r.db.QueryRowContext(ctx, `
-		INSERT INTO product_aliases (product_id, merchant_id, alias_text, item_number, source, confidence)
-		VALUES ($1,$2,$3,$4,$5,$6)
+		INSERT INTO product_aliases (product_id, merchant_id, alias_text, item_number, source, confidence, upc)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
 		ON CONFLICT (merchant_id, (lower(alias_text))) DO UPDATE SET
 			product_id = EXCLUDED.product_id,
 			item_number = COALESCE(EXCLUDED.item_number, product_aliases.item_number),
+			upc = COALESCE(EXCLUDED.upc, product_aliases.upc),
 			source = EXCLUDED.source, confidence = EXCLUDED.confidence
 		RETURNING id`,
-		a.ProductID, a.MerchantID, a.AliasText, nullStr(a.ItemNumber), a.Source, a.Confidence).Scan(&a.ID)
+		a.ProductID, a.MerchantID, a.AliasText, nullStr(a.ItemNumber), a.Source, a.Confidence, nullStr(a.UPC)).Scan(&a.ID)
 	if err != nil {
 		return fmt.Errorf("failed to upsert alias: %w", err)
 	}

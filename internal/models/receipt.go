@@ -262,6 +262,9 @@ func (r *Receipt) Validate() error {
 		if it.DiscountCents < 0 {
 			return fmt.Errorf("Item discount cannot be negative for item %d", i+1)
 		}
+		if it.UPC != "" && !ValidUPC(it.UPC) {
+			return fmt.Errorf("UPC must be 8, 12, 13 or 14 digits for item %d", i+1)
+		}
 		if it.MatchSource != "" && !ValidMatchSources[it.MatchSource] {
 			return fmt.Errorf("Invalid match_source for item %d", i+1)
 		}
@@ -287,6 +290,31 @@ type Product struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
+// ValidUPC reports whether s is a UPC/EAN/GTIN: 8, 12, 13 or 14 digits (DB CHECKs in 011).
+func ValidUPC(s string) bool {
+	switch len(s) {
+	case 8, 12, 13, 14:
+	default:
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// CleanUPC strips spaces and dashes; it returns "" when the result is not a valid UPC (used for
+// model-extracted codes, which are dropped rather than failing the receipt).
+func CleanUPC(s string) string {
+	s = strings.NewReplacer(" ", "", "-", "").Replace(strings.TrimSpace(s))
+	if ValidUPC(s) {
+		return s
+	}
+	return ""
+}
+
 // ValidMatchSources mirrors the receipt_items.match_source / product_aliases.source CHECKs.
 var ValidMatchSources = map[string]bool{
 	"item_number": true, "upc": true, "exact": true, "fuzzy": true, "llm": true, "manual": true,
@@ -300,6 +328,7 @@ type ProductAlias struct {
 	MerchantID int64    `json:"merchant_id"`
 	AliasText  string   `json:"alias_text"`
 	ItemNumber string   `json:"item_number,omitempty"`
+	UPC        string   `json:"upc,omitempty"`
 	Source     string   `json:"source"`
 	Confidence *float64 `json:"confidence,omitempty"`
 }
@@ -468,5 +497,8 @@ func (p *Product) Validate() error {
 	if err := tooLong(map[string]string{"canonical_name": p.CanonicalName, "brand": p.Brand, "category": p.Category}, MaxNameLen); err != nil {
 		return err
 	}
-	return tooLong(map[string]string{"upc": p.UPC}, MaxShortLen)
+	if p.UPC != "" && !ValidUPC(p.UPC) {
+		return errors.New("upc must be 8, 12, 13 or 14 digits")
+	}
+	return nil
 }

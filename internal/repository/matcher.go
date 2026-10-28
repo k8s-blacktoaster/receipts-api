@@ -17,7 +17,7 @@ const FuzzySuggestThreshold = 0.4
 
 // matchItem implements NORM-01 for one line, in order:
 //  1. merchant-scoped item number (product_aliases.item_number)
-//  2. UPC (products.upc; UPCs are global)
+//  2. merchant-scoped UPC (product_aliases.upc)
 //  3. merchant-scoped alias text (exact, case-insensitive; raw text, then name)
 //  4. fuzzy (pg_trgm) over the merchant's aliases and all canonical names -> suggestion only
 //
@@ -52,8 +52,8 @@ func matchItem(ctx context.Context, q txExec, merchantID int64, it *models.Recei
 			return nil
 		}
 	}
-	if u := strings.TrimSpace(it.UPC); u != "" {
-		id, ok, err := one(`SELECT id FROM products WHERE upc = $1 ORDER BY id LIMIT 1`, u)
+	if u := strings.TrimSpace(it.UPC); u != "" && merchantID != 0 {
+		id, ok, err := one(`SELECT product_id FROM product_aliases WHERE merchant_id = $1 AND upc = $2`, merchantID, u)
 		if err != nil {
 			return fmt.Errorf("match upc: %w", err)
 		}

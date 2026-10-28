@@ -23,7 +23,7 @@ func seedCatalog(t *testing.T, ctx context.Context, products ProductRepository, 
 			t.Fatal(err)
 		}
 		if err := products.UpsertAlias(ctx, &models.ProductAlias{ProductID: p.ID, MerchantID: seed.MerchantID,
-			AliasText: fmt.Sprintf("ACME ITEM %d", i), ItemNumber: fmt.Sprintf("10%d", i)}); err != nil {
+			AliasText: fmt.Sprintf("ACME ITEM %d", i), ItemNumber: fmt.Sprintf("10%d", i), UPC: fmt.Sprintf("0000000000%02d", i)}); err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, p.ID)
@@ -107,12 +107,15 @@ func TestMatcherAliasFuzzyScopeAndManual(t *testing.T) {
 
 	// Aliases are merchant-scoped: another merchant's identical item number / text does not map.
 	other := &models.Receipt{StoreName: "Other Shop", Date: "2026-02-01", Source: models.SourceManual, Items: []models.ReceiptItem{
-		{Name: "ACME ITEM 1", ItemNumber: "101", Quantity: 1}}}
+		{Name: "ACME ITEM 1", ItemNumber: "101", Quantity: 1},
+		{Name: "?", UPC: "000000000001", Quantity: 1}}}
 	if err := receipts.Create(ctx, other); err != nil {
 		t.Fatal(err)
 	}
 	og, _ := receipts.GetByID(ctx, other.ID)
-	if og.Items[0].ProductID != nil {
-		t.Errorf("cross-merchant alias applied: %+v", og.Items[0])
+	for _, it := range og.Items {
+		if it.ProductID != nil {
+			t.Errorf("cross-merchant alias/UPC applied: %+v", it)
+		}
 	}
 }

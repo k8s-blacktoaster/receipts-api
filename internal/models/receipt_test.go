@@ -77,3 +77,26 @@ func TestValidateMatchFields(t *testing.T) {
 		}
 	}
 }
+
+func TestUPCValidation(t *testing.T) {
+	for s, ok := range map[string]bool{"12345678": true, "012345678905": true, "4006381333931": true, "10012345678902": true,
+		"1234567": false, "123456789": false, "12345678901": false, "123456789012345": false, "01234567890X": false, "": false} {
+		if ValidUPC(s) != ok {
+			t.Errorf("ValidUPC(%q) = %v", s, !ok)
+		}
+	}
+	if CleanUPC(" 0 12345-678905 ") != "012345678905" || CleanUPC("12-34") != "" {
+		t.Error("CleanUPC")
+	}
+	r := &Receipt{StoreName: "Acme", Date: "2026-01-02", Items: []ReceiptItem{{Name: "x", Quantity: 1, UPC: "123"}}}
+	if err := r.Validate(); err == nil {
+		t.Error("item with 3-digit UPC accepted")
+	}
+	r.Items[0].UPC = "012345678905"
+	if err := r.Validate(); err != nil {
+		t.Error(err)
+	}
+	if err := (&Product{CanonicalName: "x", UPC: "12345"}).Validate(); err == nil {
+		t.Error("product with 5-digit UPC accepted")
+	}
+}

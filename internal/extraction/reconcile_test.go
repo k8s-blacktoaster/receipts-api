@@ -141,3 +141,13 @@ func TestPromptMerchantRuleIsGeneric(t *testing.T) {
 		t.Errorf("prompt must stay merchant-agnostic (version %s)", PromptVersion)
 	}
 }
+
+// Model-read UPCs are cleaned; an invalid one is dropped instead of failing the receipt.
+func TestApplyCleansUPC(t *testing.T) {
+	good, bad := "0 49000-028911", "12345"
+	r := &models.Receipt{}
+	Apply(r, &Extracted{Items: []ExtractedItem{{Name: "a", UPC: &good}, {Name: "b", UPC: &bad}}})
+	if len(r.Items) != 2 || r.Items[0].UPC != "049000028911" || r.Items[1].UPC != "" {
+		t.Fatalf("items %+v", r.Items)
+	}
+}
