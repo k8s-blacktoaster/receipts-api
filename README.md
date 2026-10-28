@@ -110,8 +110,10 @@ Every saved line (manual create, edit, or extraction) without a product goes thr
 scoped to the receipt's merchant:
 
 1. merchant item number (`product_aliases.item_number`) -> `match_source=item_number`
-2. UPC (`products.upc`) -> `upc`
-3. printed text, case-insensitive (`raw_text`, then `name`) against the merchant's aliases -> `exact`
+2. merchant UPC (`product_aliases.upc`, unique per merchant) -> `upc`. UPCs must be 8, 12, 13 or
+   14 digits (400 otherwise); codes read by the model are cleaned and dropped if invalid.
+3. printed text (`raw_text`, then `name`) against the merchant's aliases, compared with
+   `merchant_name_key` (case, punctuation and whitespace ignored) -> `exact`
 4. pg_trgm similarity >= 0.4 over the merchant's aliases and all canonical names -> **suggestion
    only** (`suggested_product_id`, `match_confidence`); the line stays unmapped and appears in the
    review queue.
@@ -121,9 +123,12 @@ queue (API or `/review`) records a manual alias (printed text plus item number) 
 maps the merchant's other unmapped lines with the same item number or text, and is reused for every
 later receipt. No LLM is called for matching (the `llm` source is reserved).
 
-Merging merchants (`/merchants`) moves receipts, folds stores with the same number or address,
-and moves aliases: a text collision keeps the target's alias; an item-number collision keeps the
-moved alias with `item_number` cleared (NORM-03; migration 006 applies the same rule).
+Merging merchants (`/merchants`) moves receipts, folds stores with the same number (or, for a store
+without a number, the same address; a numbered store is never folded by address, both are kept),
+and moves aliases: a text collision keeps the target's alias; an item-number or UPC collision keeps
+the moved alias with that code cleared (NORM-03; migration 006 applies the same rule). The merged
+name is recorded in `merchant_name_redirects`, so later receipts printed with it resolve to the
+survivor; renaming another merchant onto a redirected name is a 409.
 
 ### Web UI
 

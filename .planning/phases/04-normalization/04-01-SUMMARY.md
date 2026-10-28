@@ -22,6 +22,14 @@
   (20/20 once aliases/UPCs exist).
 - Corrections create merchant-scoped aliases reused next time: `TestReviewQueueMapLearnsAliasAndReusesIt`.
 
+## QA follow-ups (after 7bb14a1)
+- Merges stick: migration 010 `merchant_name_redirects`; merged-away names resolve to the survivor.
+- Review map with a new product creates it inside the map transaction (no orphans on 404/409).
+- Merge never folds a numbered store by address; both stores are kept.
+- UPCs: 8/12/13/14 digits (model + API), migration 011 per-merchant unique `product_aliases.upc`
+  (invalid products.upc cleared; duplicates keep the oldest alias's UPC), matching per merchant.
+- Exact alias matching uses merchant_name_key (migration 012 index).
+
 ## Conservative choices (open questions)
 - Fuzzy matches never auto-map; LLM suggestions are not implemented (no live calls; `llm` reserved).
 - Edits keep an existing product_id even if the item text/number changed.
