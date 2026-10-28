@@ -57,9 +57,12 @@ func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt) erro
 		INSERT INTO merchants (name, category) VALUES ($1, $2)
 		ON CONFLICT ((lower(regexp_replace(btrim(name), '\s+', ' ', 'g')))) DO UPDATE SET
 			category = COALESCE(merchants.category, EXCLUDED.category),
-			-- upgrade an all-lower or ALL-CAPS stored name when a mixed-case variant shows up
-			name = CASE WHEN (merchants.name = lower(merchants.name) OR merchants.name = upper(merchants.name))
-			             AND EXCLUDED.name <> lower(EXCLUDED.name) AND EXCLUDED.name <> upper(EXCLUDED.name)
+			-- a mixed-case name upgrades a stored name that is all-lower, ALL-CAPS or initcap'd
+			-- (machine-derived). A stored mixed-case, non-initcap name is never replaced, so
+			-- different mixed-case variants cannot flip-flop.
+			name = CASE WHEN EXCLUDED.name <> lower(EXCLUDED.name) AND EXCLUDED.name <> upper(EXCLUDED.name)
+			             AND (merchants.name = lower(merchants.name) OR merchants.name = upper(merchants.name)
+			                  OR (merchants.name = initcap(merchants.name) AND EXCLUDED.name <> initcap(EXCLUDED.name)))
 			            THEN EXCLUDED.name ELSE merchants.name END
 		RETURNING id`, r.StoreName, nullStr(r.StoreCategory)).Scan(&r.MerchantID)
 	if err != nil {

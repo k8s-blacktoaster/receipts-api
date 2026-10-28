@@ -179,3 +179,39 @@ func TestMerchantAllCapsUpgrade(t *testing.T) {
 		t.Fatalf("merchants = %q, want [Costco]", names)
 	}
 }
+
+// Initcap'd stored names are upgraded by a real mixed-case variant; no flip-flop afterwards.
+func TestMerchantInitcapUpgradeNoFlipFlop(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	repo := NewReceiptRepository(db)
+	name := func() string {
+		var n string
+		db.QueryRow(`SELECT name FROM merchants`).Scan(&n)
+		return n
+	}
+	create := func(n string) {
+		t.Helper()
+		if err := repo.Create(ctx, &models.Receipt{StoreName: n, Date: "2026-10-01"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	create("TRADER JOE'S")
+	if _, err := db.Exec(`UPDATE merchants SET name = initcap(name)`); err != nil { // as 006 would leave it
+		t.Fatal(err)
+	}
+	if got := name(); got != "Trader Joe'S" {
+		t.Fatalf("setup: %q", got)
+	}
+	create("Trader Joe's") // mixed, not initcap -> upgrades the initcap'd name
+	if got := name(); got != "Trader Joe's" {
+		t.Fatalf("upgrade: %q", got)
+	}
+	create("TRADER JOE'S")
+	create("trader joe's")
+	create("Trader Joe'S") // initcap form: not an upgrade
+	create("Trader JOE's") // another mixed variant: must not flip-flop
+	if got := name(); got != "Trader Joe's" {
+		t.Fatalf("flip-flop: %q", got)
+	}
+}
