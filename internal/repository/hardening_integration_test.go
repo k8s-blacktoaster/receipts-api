@@ -32,7 +32,7 @@ func TestF1MerchantDedupeTrimmed(t *testing.T) {
 	if a.MerchantID != b.MerchantID {
 		t.Fatalf("expected same merchant, got %d vs %d", a.MerchantID, b.MerchantID)
 	}
-	mustExecErr(t, db, "merchants_name_uniq", `INSERT INTO merchants (name) VALUES ('TRADER JOE''S')`)
+	mustExecErr(t, db, "merchants_name_uniq", `INSERT INTO merchants (name) VALUES ('trader_joes')`)
 	mustExecErr(t, db, "merchants_name_normalized", `INSERT INTO merchants (name) VALUES (' Other ')`)
 }
 
@@ -152,10 +152,10 @@ func TestF7ViewsUseMerchantStore(t *testing.T) {
 	if err := db.QueryRow(`SELECT store_name, store_address FROM receipt_details_view WHERE receipt_id = $1 LIMIT 1`, r.ID).Scan(&name, &addr); err != nil {
 		t.Fatal(err)
 	}
-	if name != "Linked Mart" || addr != "9 Elm" {
+	if name != "linked_mart" || addr != "9 Elm" {
 		t.Fatalf("view not reading merchant/store: %q %q", name, addr)
 	}
-	if err := db.QueryRow(`SELECT store_name FROM recent_purchases_view WHERE receipt_id = $1`, r.ID).Scan(&name); err != nil || name != "Linked Mart" {
+	if err := db.QueryRow(`SELECT store_name FROM recent_purchases_view WHERE receipt_id = $1`, r.ID).Scan(&name); err != nil || name != "linked_mart" {
 		t.Fatalf("recent_purchases_view: %q %v", name, err)
 	}
 }

@@ -1,64 +1,59 @@
--- 006: merchant names collapse internal whitespace ('Trader  Joes' = 'Trader Joes') and merged
--- duplicates keep a properly cased display name.
--- Normalized key: lower(regexp_replace(btrim(name), '\s+', ' ', 'g')).
--- Display name: see _merchant_display below.
+-- 006: one stored merchant name = normalized key (used for matching AND display).
+-- merchant_name_key() must match Go models.NormalizeMerchantName exactly (parity test):
+--   lower -> '&' to ' and ' -> drop listed punctuation -> runs of separators to '_' -> strip '_'.
+-- Explicit character lists (not locale classes) keep Go and Postgres in agreement.
+-- Edited in place before release; only test databases ran earlier versions.
+CREATE FUNCTION merchant_name_key(t text) RETURNS text
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $fn$
+SELECT btrim(
+         regexp_replace(
+           regexp_replace(replace(lower(t), '&', ' and '),
+                          '[!"#$%''()*+,./:;<=>?@\[\\\]^`{|}~‘’“”–—…·•®™©]', '', 'g'),
+           '[ \t\n\v\f\r _-]+', '_', 'g'),
+         '_')
+$fn$;
 
 DROP INDEX IF EXISTS merchants_name_uniq;
 ALTER TABLE merchants DROP CONSTRAINT IF EXISTS merchants_name_trimmed;
-UPDATE merchants SET name = regexp_replace(btrim(name), '\s+', ' ', 'g')
- WHERE name <> regexp_replace(btrim(name), '\s+', ' ', 'g');
 
 CREATE TEMP TABLE _merchant_map ON COMMIT DROP AS
-SELECT id, min(id) OVER (PARTITION BY lower(name)) AS keep_id FROM merchants;
-
--- Display name per merged group, from the legacy receipts.store_name variants (whitespace-
--- collapsed, one vote per receipt; merchant rows' own names are zero-vote fallbacks):
---   1. any mixed-case variant beats ALL-CAPS / all-lower regardless of votes;
---      among mixed-case variants the most votes wins (tie -> earliest merchant id, then name);
---   2. if no mixed-case variant exists, use initcap() of the top variant ('Whole Foods').
--- (006 was edited in place before release; only test databases had run the earlier version.)
-CREATE TEMP TABLE _merchant_display ON COMMIT DROP AS
-SELECT DISTINCT ON (keep_id) keep_id, name
-FROM (
-    SELECT keep_id, name, sum(votes) AS votes, min(src_id) AS src_id
-    FROM (
-        SELECT mm.keep_id, regexp_replace(btrim(r.store_name), '\s+', ' ', 'g') AS name, 1 AS votes, mm.id AS src_id
-        FROM receipts r JOIN _merchant_map mm ON mm.id = r.merchant_id
-        WHERE r.store_name IS NOT NULL AND btrim(r.store_name) <> ''
-        UNION ALL
-        SELECT mm.keep_id, m.name, 0, m.id
-        FROM merchants m JOIN _merchant_map mm ON mm.id = m.id
-    ) c
-    GROUP BY keep_id, name
-) v
-ORDER BY keep_id, (name <> lower(name) AND name <> upper(name)) DESC, votes DESC, src_id, name;
--- name_is_derived: true when the name was machine-chosen (initcap fallback, or an all-lower /
--- ALL-CAPS name with no letters to case). Only derived names are upgraded automatically later.
-ALTER TABLE _merchant_display ADD COLUMN derived BOOLEAN NOT NULL DEFAULT false;
-UPDATE _merchant_display SET derived = true, name = initcap(name) WHERE name = lower(name) OR name = upper(name);
-
+SELECT id, min(id) OVER (PARTITION BY merchant_name_key(name)) AS keep_id FROM merchants;
+-- stores of a merged group dedupe by (store_number) or, without a number, (lower(address))
+CREATE TEMP TABLE _store_map ON COMMIT DROP AS
+SELECT s.id, m.keep_id AS keep_merchant,
+       min(s.id) OVER (PARTITION BY m.keep_id,
+           CASE WHEN s.store_number IS NOT NULL THEN 'n:' || s.store_number
+                WHEN s.address IS NOT NULL THEN 'a:' || lower(s.address)
+                ELSE 'id:' || s.id END) AS keep_store
+FROM stores s JOIN _merchant_map m ON m.id = s.merchant_id;
+CREATE TEMP TABLE _receipt_store ON COMMIT DROP AS
+SELECT r.id AS receipt_id, sm.keep_store
+FROM receipts r JOIN _store_map sm ON sm.id = r.store_id WHERE sm.keep_store <> sm.id;
+-- detach receipts from duplicate stores, drop those stores, move kept stores
+-- (ON UPDATE CASCADE carries their receipts), move all receipts, then re-attach
+UPDATE receipts r SET store_id = NULL FROM _receipt_store x WHERE x.receipt_id = r.id;
+DELETE FROM stores s USING _store_map sm WHERE sm.id = s.id AND sm.keep_store <> sm.id;
+UPDATE stores s SET merchant_id = sm.keep_merchant FROM _store_map sm
+ WHERE sm.id = s.id AND s.merchant_id <> sm.keep_merchant;
 DELETE FROM _merchant_map WHERE id = keep_id;
--- receipts on a duplicate store: move store + merchant together (composite FK)
-UPDATE receipts r SET store_id = k.id, merchant_id = m.keep_id
-  FROM stores s JOIN _merchant_map m ON s.merchant_id = m.id
-  JOIN stores k ON k.merchant_id = m.keep_id
-   AND ((s.store_number IS NOT NULL AND k.store_number = s.store_number)
-     OR (s.store_number IS NULL AND k.store_number IS NULL AND lower(k.address) = lower(s.address)))
- WHERE r.store_id = s.id;
-DELETE FROM stores s USING _merchant_map m, stores k
- WHERE s.merchant_id = m.id AND k.merchant_id = m.keep_id
-   AND ((s.store_number IS NOT NULL AND k.store_number = s.store_number)
-     OR (s.store_number IS NULL AND k.store_number IS NULL AND lower(k.address) = lower(s.address)));
--- remaining stores move to the kept merchant (ON UPDATE CASCADE carries their receipts)
-UPDATE stores s SET merchant_id = m.keep_id FROM _merchant_map m WHERE s.merchant_id = m.id;
 UPDATE receipts r SET merchant_id = m.keep_id FROM _merchant_map m WHERE r.merchant_id = m.id;
-DELETE FROM product_aliases a USING _merchant_map m, product_aliases k
- WHERE a.merchant_id = m.id AND k.merchant_id = m.keep_id AND lower(k.alias_text) = lower(a.alias_text);
+UPDATE receipts r SET store_id = x.keep_store FROM _receipt_store x WHERE x.receipt_id = r.id;
+-- aliases of a merged group: keep the oldest per lower(alias_text) and per item_number
+DELETE FROM product_aliases a USING (
+    SELECT a.id,
+           row_number() OVER (PARTITION BY COALESCE(m.keep_id, a.merchant_id), lower(a.alias_text) ORDER BY a.id) AS rn_alias,
+           CASE WHEN a.item_number IS NULL THEN 1 ELSE
+           row_number() OVER (PARTITION BY COALESCE(m.keep_id, a.merchant_id), a.item_number ORDER BY a.id) END AS rn_item
+    FROM product_aliases a LEFT JOIN _merchant_map m ON m.id = a.merchant_id
+    WHERE a.merchant_id IN (SELECT id FROM _merchant_map) OR a.merchant_id IN (SELECT keep_id FROM _merchant_map)
+) d WHERE d.id = a.id AND (d.rn_alias > 1 OR d.rn_item > 1);
 UPDATE product_aliases a SET merchant_id = m.keep_id FROM _merchant_map m WHERE a.merchant_id = m.id;
 DELETE FROM merchants WHERE id IN (SELECT id FROM _merchant_map);
-ALTER TABLE merchants ADD COLUMN name_is_derived BOOLEAN NOT NULL DEFAULT false;
-UPDATE merchants m SET name = d.name, name_is_derived = d.derived FROM _merchant_display d WHERE d.keep_id = m.id;
 
-CREATE UNIQUE INDEX merchants_name_uniq ON merchants (lower(regexp_replace(btrim(name), '\s+', ' ', 'g')));
+UPDATE merchants SET name = merchant_name_key(name) WHERE name <> merchant_name_key(name);
+-- names that normalize to '' (pure punctuation) cannot satisfy the CHECK; keep them visible
+UPDATE merchants SET name = 'unknown_' || id WHERE name = '';
+
+CREATE UNIQUE INDEX merchants_name_uniq ON merchants (name);
 ALTER TABLE merchants ADD CONSTRAINT merchants_name_normalized
-    CHECK (name = regexp_replace(btrim(name), '\s+', ' ', 'g') AND name <> '');
+    CHECK (name <> '' AND name = merchant_name_key(name));

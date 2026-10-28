@@ -41,29 +41,20 @@ type txExec interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// resolveMerchantStore finds or creates the merchant (by case-insensitive name) and,
+// resolveMerchantStore finds or creates the merchant (by models.NormalizeMerchantName key) and,
 // when a store number or address is given, the store location.
-// NormalizeMerchantName trims and collapses internal whitespace (matches the DB unique key).
-func NormalizeMerchantName(s string) string { return strings.Join(strings.Fields(s), " ") }
-
 func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt) error {
-	r.StoreName = NormalizeMerchantName(r.StoreName)
+	r.StoreName = strings.TrimSpace(r.StoreName) // as printed (legacy receipts.store_name)
 	r.StoreNumber = strings.TrimSpace(r.StoreNumber)
 	r.StoreAddress = strings.TrimSpace(r.StoreAddress)
-	if r.StoreName == "" {
-		return errors.New("store name is required")
+	key := models.NormalizeMerchantName(r.StoreName)
+	if key == "" {
+		return errors.New("store name must contain a letter or digit")
 	}
 	err := q.QueryRowContext(ctx, `
-		INSERT INTO merchants (name, category, name_is_derived)
-		VALUES ($1, $2, $1 = lower($1) OR $1 = upper($1))
-		ON CONFLICT ((lower(regexp_replace(btrim(name), '\s+', ' ', 'g')))) DO UPDATE SET
-			category = COALESCE(merchants.category, EXCLUDED.category),
-			-- only a derived (machine-chosen / all-lower / ALL-CAPS) name is upgraded, and only by a
-			-- mixed-case spelling; once a mixed-case name is written it never changes automatically
-			name = CASE WHEN merchants.name_is_derived AND NOT EXCLUDED.name_is_derived
-			            THEN EXCLUDED.name ELSE merchants.name END,
-			name_is_derived = merchants.name_is_derived AND EXCLUDED.name_is_derived
-		RETURNING id`, r.StoreName, nullStr(r.StoreCategory)).Scan(&r.MerchantID)
+		INSERT INTO merchants (name, category) VALUES ($1, $2)
+		ON CONFLICT (name) DO UPDATE SET category = COALESCE(merchants.category, EXCLUDED.category)
+		RETURNING id`, key, nullStr(r.StoreCategory)).Scan(&r.MerchantID)
 	if err != nil {
 		return fmt.Errorf("failed to resolve merchant: %w", err)
 	}

@@ -206,8 +206,8 @@ func TestWhereDidIBuyAndMerchantScopedAliases(t *testing.T) {
 	if len(locs) != 3 {
 		t.Fatalf("locations = %d", len(locs))
 	}
-	if locs[0].MerchantName != "Costco" || locs[0].StoreNumber != "456" || locs[0].PurchaseDate != "2026-10-20" ||
-		locs[1].MerchantName != "Safeway" || locs[1].StoreAddress != "2 Elm St" || locs[2].UnitPriceCents != 899 {
+	if locs[0].MerchantName != "costco" || locs[0].StoreNumber != "456" || locs[0].PurchaseDate != "2026-10-20" ||
+		locs[1].MerchantName != "safeway" || locs[1].StoreAddress != "2 Elm St" || locs[2].UnitPriceCents != 899 {
 		t.Fatalf("unexpected locations: %+v", locs)
 	}
 
