@@ -54,16 +54,15 @@ func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt) erro
 		return errors.New("store name is required")
 	}
 	err := q.QueryRowContext(ctx, `
-		INSERT INTO merchants (name, category) VALUES ($1, $2)
+		INSERT INTO merchants (name, category, name_is_derived)
+		VALUES ($1, $2, $1 = lower($1) OR $1 = upper($1))
 		ON CONFLICT ((lower(regexp_replace(btrim(name), '\s+', ' ', 'g')))) DO UPDATE SET
 			category = COALESCE(merchants.category, EXCLUDED.category),
-			-- a mixed-case name upgrades a stored name that is all-lower, ALL-CAPS or initcap'd
-			-- (machine-derived). A stored mixed-case, non-initcap name is never replaced, so
-			-- different mixed-case variants cannot flip-flop.
-			name = CASE WHEN EXCLUDED.name <> lower(EXCLUDED.name) AND EXCLUDED.name <> upper(EXCLUDED.name)
-			             AND (merchants.name = lower(merchants.name) OR merchants.name = upper(merchants.name)
-			                  OR (merchants.name = initcap(merchants.name) AND EXCLUDED.name <> initcap(EXCLUDED.name)))
-			            THEN EXCLUDED.name ELSE merchants.name END
+			-- only a derived (machine-chosen / all-lower / ALL-CAPS) name is upgraded, and only by a
+			-- mixed-case spelling; once a mixed-case name is written it never changes automatically
+			name = CASE WHEN merchants.name_is_derived AND NOT EXCLUDED.name_is_derived
+			            THEN EXCLUDED.name ELSE merchants.name END,
+			name_is_derived = merchants.name_is_derived AND EXCLUDED.name_is_derived
 		RETURNING id`, r.StoreName, nullStr(r.StoreCategory)).Scan(&r.MerchantID)
 	if err != nil {
 		return fmt.Errorf("failed to resolve merchant: %w", err)

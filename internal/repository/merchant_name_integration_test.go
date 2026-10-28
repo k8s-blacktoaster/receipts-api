@@ -83,6 +83,15 @@ func TestMerchantBackfillDisplayName(t *testing.T) {
 	check(841, "Whole Foods")
 	check(821, "Sprouts Market")
 	check(851, "Home Depot")
+	derived := func(id int, want bool) {
+		t.Helper()
+		var d bool
+		if err := db.QueryRow(`SELECT name_is_derived FROM merchants WHERE id = $1`, id).Scan(&d); err != nil || d != want {
+			t.Fatalf("merchant %d name_is_derived = %v (%v), want %v", id, d, err, want)
+		}
+	}
+	derived(801, false) // chosen mixed-case variant
+	derived(841, true)  // initcap fallback
 	var n, sid int
 	db.QueryRow(`SELECT count(*) FROM merchants WHERE id IN (802,803,812,822,842,852)`).Scan(&n)
 	db.QueryRow(`SELECT store_id FROM receipts WHERE store_name = 'Sprouts Market'`).Scan(&sid)
@@ -197,7 +206,7 @@ func TestMerchantInitcapUpgradeNoFlipFlop(t *testing.T) {
 		}
 	}
 	create("TRADER JOE'S")
-	if _, err := db.Exec(`UPDATE merchants SET name = initcap(name)`); err != nil { // as 006 would leave it
+	if _, err := db.Exec(`UPDATE merchants SET name = initcap(name), name_is_derived = true`); err != nil { // as 006 would leave it
 		t.Fatal(err)
 	}
 	if got := name(); got != "Trader Joe'S" {
@@ -209,9 +218,45 @@ func TestMerchantInitcapUpgradeNoFlipFlop(t *testing.T) {
 	}
 	create("TRADER JOE'S")
 	create("trader joe's")
-	create("Trader Joe'S") // initcap form: not an upgrade
+	create("Trader Joe'S") // stored name is no longer derived: never changes
 	create("Trader JOE's") // another mixed variant: must not flip-flop
 	if got := name(); got != "Trader Joe's" {
 		t.Fatalf("flip-flop: %q", got)
+	}
+}
+
+// QA repro (a046b33): a stored mixed-case 'Trader Joes' is never overwritten by 'Trader joes'.
+func TestMixedCaseStoredNameNeverOverwritten(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	repo := NewReceiptRepository(db)
+	for _, n := range []string{"Trader Joes", "Trader joes", "TRADER JOES", "trader joes"} {
+		if err := repo.Create(ctx, &models.Receipt{StoreName: n, Date: "2026-10-01"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var name string
+	var derived bool
+	db.QueryRow(`SELECT name, name_is_derived FROM merchants`).Scan(&name, &derived)
+	if name != "Trader Joes" || derived {
+		t.Fatalf("got %q derived=%v, want 'Trader Joes' derived=false", name, derived)
+	}
+}
+
+// New merchants: all-lower / ALL-CAPS names are derived, mixed-case are not.
+func TestNewMerchantDerivedFlag(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+	repo := NewReceiptRepository(db)
+	for n, want := range map[string]bool{"aldi": true, "IKEA": true, "Target": false, "7-11": true} {
+		r := &models.Receipt{StoreName: n, Date: "2026-10-01"}
+		if err := repo.Create(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+		var d bool
+		db.QueryRow(`SELECT name_is_derived FROM merchants WHERE id = $1`, r.MerchantID).Scan(&d)
+		if d != want {
+			t.Errorf("%q derived=%v want %v", n, d, want)
+		}
 	}
 }

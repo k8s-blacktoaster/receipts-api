@@ -32,7 +32,10 @@ FROM (
     GROUP BY keep_id, name
 ) v
 ORDER BY keep_id, (name <> lower(name) AND name <> upper(name)) DESC, votes DESC, src_id, name;
-UPDATE _merchant_display SET name = initcap(name) WHERE name = lower(name) OR name = upper(name);
+-- name_is_derived: true when the name was machine-chosen (initcap fallback, or an all-lower /
+-- ALL-CAPS name with no letters to case). Only derived names are upgraded automatically later.
+ALTER TABLE _merchant_display ADD COLUMN derived BOOLEAN NOT NULL DEFAULT false;
+UPDATE _merchant_display SET derived = true, name = initcap(name) WHERE name = lower(name) OR name = upper(name);
 
 DELETE FROM _merchant_map WHERE id = keep_id;
 -- receipts on a duplicate store: move store + merchant together (composite FK)
@@ -53,7 +56,8 @@ DELETE FROM product_aliases a USING _merchant_map m, product_aliases k
  WHERE a.merchant_id = m.id AND k.merchant_id = m.keep_id AND lower(k.alias_text) = lower(a.alias_text);
 UPDATE product_aliases a SET merchant_id = m.keep_id FROM _merchant_map m WHERE a.merchant_id = m.id;
 DELETE FROM merchants WHERE id IN (SELECT id FROM _merchant_map);
-UPDATE merchants m SET name = d.name FROM _merchant_display d WHERE d.keep_id = m.id AND m.name <> d.name;
+ALTER TABLE merchants ADD COLUMN name_is_derived BOOLEAN NOT NULL DEFAULT false;
+UPDATE merchants m SET name = d.name, name_is_derived = d.derived FROM _merchant_display d WHERE d.keep_id = m.id;
 
 CREATE UNIQUE INDEX merchants_name_uniq ON merchants (lower(regexp_replace(btrim(name), '\s+', ' ', 'g')));
 ALTER TABLE merchants ADD CONSTRAINT merchants_name_normalized
