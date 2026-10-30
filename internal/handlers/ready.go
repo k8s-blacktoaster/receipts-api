@@ -17,6 +17,9 @@ type Pinger interface {
 type Readiness struct {
 	DB      Pinger
 	Timeout time.Duration // default 2s
+	// Schema, when set, must return nil for the pod to be ready: the DB's applied migrations
+	// match what this binary expects (not down-level, not ahead/unknown). See DEPLOY.md rollback.
+	Schema func(ctx context.Context) error
 }
 
 func (h Readiness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -37,6 +40,13 @@ func (h Readiness) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte("database unavailable\n"))
 		return
+	}
+	if h.Schema != nil {
+		if err := h.Schema(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(err.Error() + "\n"))
+			return
+		}
 	}
 	_, _ = w.Write([]byte("ok\n"))
 }

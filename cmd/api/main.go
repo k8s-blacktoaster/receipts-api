@@ -161,7 +161,13 @@ func main() {
 		ui.Queue = queue
 	}
 	productHandler := &handlers.ProductHandler{Products: repository.NewProductRepository(db), Logger: logger}
-	mounts := []router.Mount{{Path: "/readyz", Handler: handlers.Readiness{DB: db, Timeout: 2 * time.Second}}}
+	expectedSchema, err := database.MigrationVersions(migrationsPath)
+	if err != nil {
+		logger.Error("failed to list migrations", "error", err)
+		os.Exit(1)
+	}
+	mounts := []router.Mount{{Path: "/readyz", Handler: handlers.Readiness{DB: db, Timeout: 2 * time.Second,
+		Schema: func(ctx context.Context) error { return database.CheckSchema(ctx, db, expectedSchema) }}}}
 	if cfg.MCPToken != "" {
 		mcpServer := &mcp.Server{Name: "receipts-api", Version: "1.0", Logger: logger,
 			Tools: mcp.Tools(mcp.Deps{Query: repository.NewQueryRepository(db), Products: repository.NewProductRepository(db)})}

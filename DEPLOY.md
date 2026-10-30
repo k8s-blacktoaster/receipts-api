@@ -36,7 +36,25 @@ Run these before the first install. Fix the values or the cluster before you con
    If the controller lives elsewhere, set
    `--set networkPolicy.ingressController.namespace=<ns>` and the matching `podLabels`.
 
-3. **The cluster add-ons exist:**
+3. **There is a default StorageClass.** The chart's PVCs (Postgres, uploads, backups) leave
+   `storageClassName` empty.
+
+   ```sh
+   kubectl get storageclass     # one row marked "(default)", e.g. local-path on k3s
+   ```
+
+   Otherwise set `postgres.storage.className`, `api.uploads.className` and
+   `backup.storage.className`.
+
+4. **External Secrets Operator serves `external-secrets.io/v1beta1`.** The chart's
+   ExternalSecret uses that version, and newer ESO releases may drop it.
+
+   ```sh
+   kubectl api-versions | grep '^external-secrets.io/'         # must list external-secrets.io/v1beta1
+   kubectl get crd externalsecrets.external-secrets.io -o jsonpath='{.spec.versions[?(@.served==true)].name}'
+   ```
+
+5. **The cluster add-ons exist:**
    - `kubectl get clustersecretstore vault-backend` shows `Ready`.
    - `kubectl get clusterissuer vault-issuer` shows `Ready`.
 
@@ -129,39 +147,100 @@ Backups: run one now and check it landed.
 
 ```sh
 kubectl -n receipts create job --from=cronjob/receipts-pg-backup receipts-pg-backup-manual
+kubectl -n receipts wait --for=condition=complete job/receipts-pg-backup-manual --timeout=15m \
+  || { echo "backup did not complete"; kubectl -n receipts describe job/receipts-pg-backup-manual; }
 kubectl -n receipts logs job/receipts-pg-backup-manual      # "wrote /backups/receipts-<ts>.dump"
+kubectl -n receipts delete job receipts-pg-backup-manual    # so the name can be reused
 ```
 
 ## 6. Roll back
 
+**Migrations are not all additive.** Migration 014 drops `receipts.store_category`,
+`store_address` and `store_phone` and renames `store_name` to `printed_merchant_name`. 015
+normalizes blank merchant and store fields to NULL. An image from before 014 running on a
+014+ database fails every receipt read with 500, while `/api/v1/health` stays 200. Images from
+this PR on also gate `/readyz` on the schema: when the applied migrations differ from the ones in
+the image (missing or unknown versions), the pod is not ready and the response lists the
+versions.
+
+### Image-only rollback (target image has the same migrations)
+
 ```sh
 helm -n receipts history receipts
 helm -n receipts rollback receipts <REVISION>
+kubectl -n receipts rollout status deploy/receipts-api   # readiness confirms the schema matches
 ```
 
-Migrations are forward-only on rollback: an older image ignores newer tables/columns it does not
-know, and every migration so far is additive. If a release ever needs a schema rollback, run the
-paired down migration explicitly first, with the NEW image (it has the down files):
+### Rollback across migrations (for example to an image from before 014)
 
-```sh
-# app=receipts-migrate: allowed to reach Postgres by the NetworkPolicy, but NOT selected by the
-# receipts-api Service, so the ingress never routes traffic to this pod
-kubectl -n receipts run migrate-down --rm -it --restart=Never --labels=app=receipts-migrate \
-  --image=registry.k8s.blacktoaster.com/receipts/api:<new-sha7> \
-  --overrides='{"spec":{"containers":[{"name":"m","image":"registry.k8s.blacktoaster.com/receipts/api:<new-sha7>","command":["./migrate","down","-steps","1"],"env":[{"name":"DB_PASSWORD","valueFrom":{"secretKeyRef":{"name":"receipts-app-secret","key":"db-password"}}},{"name":"DATABASE_URL","value":"postgres://receipts:$(DB_PASSWORD)@receipts-postgres:5432/receipts?sslmode=disable"}]}]}}'
-```
+Order matters: **first migrate down with the NEW (current) image, then roll the image back.**
+Only the new image has the down files. The old image doesn't know the newer versions, so it
+can't undo them. It also doesn't migrate down at startup: it would just run against the newer
+schema.
 
-Take a manual backup (above) before any schema rollback.
+1. Take a manual backup (section 5) and keep it. It is the only way back to the exact current data.
+2. Stop the app so nothing writes during the change:
+
+   ```sh
+   kubectl -n receipts scale deploy/receipts-api --replicas=0
+   ```
+
+3. Migrate down with the current image. N = the number of migrations newer than the target image.
+   To go back to a pre-014 image, N=2 (015, then 014).
+
+   ```sh
+   # app=receipts-migrate: allowed to reach Postgres by the NetworkPolicy, but NOT selected by the
+   # receipts-api Service, so the ingress never routes traffic to this pod
+   kubectl -n receipts run migrate-down --rm -it --restart=Never --labels=app=receipts-migrate \
+     --image=registry.k8s.blacktoaster.com/receipts/api:<current-sha7> \
+     --overrides='{"spec":{"containers":[{"name":"m","image":"registry.k8s.blacktoaster.com/receipts/api:<current-sha7>","command":["./migrate","down","-steps","N"],"env":[{"name":"DB_PASSWORD","valueFrom":{"secretKeyRef":{"name":"receipts-app-secret","key":"db-password"}}},{"name":"DATABASE_URL","value":"postgres://receipts:$(DB_PASSWORD)@receipts-postgres:5432/receipts?sslmode=disable"}]}]}}'
+   ```
+
+4. Roll the image back and scale up:
+
+   ```sh
+   helm -n receipts rollback receipts <REVISION>
+   kubectl -n receipts scale deploy/receipts-api --replicas=1
+   ```
+
+   The rollback restores the old replica count. The old image's startup migrate is a no-op.
+
+**What `014` down loses (lossy):**
+
+- The legacy columns come back, filled from the normalized tables, not from the original values:
+  - each receipt gets its merchant's category and its store's address and phone;
+  - where a receipt's own pre-014 value differed from its merchant's or store's, the original is
+    gone.
+- Receipts without a merchant get a NULL category. Receipts without a store get a NULL address
+  and phone.
+- Phones on receipts that had no store row were already dropped by 014 up. Down can't bring them
+  back.
+- The blank-vs-NULL distinction in the old columns is lost.
+- 014 up's writes to `merchants.category` and `stores.address`/`phone` stay; down doesn't undo
+  them.
+
+`015` down is exact: it restores the blank values it replaced with NULL and drops its CHECKs.
+
+The only full recovery from these losses is restoring the pre-upgrade backup (below).
 
 ## Restore from a backup
 
 ```sh
 # pause the nightly backup so it cannot dump a half-restored database
 kubectl -n receipts patch cronjob receipts-pg-backup -p '{"spec":{"suspend":true}}'
-# wait until the CronJob has no active job (.status.active is empty)
-until [ -z "$(kubectl -n receipts get cronjob receipts-pg-backup -o jsonpath='{.status.active}')" ]; do
-  echo 'backup still running...'; sleep 5
-done
+# Wait until no backup job is running: scheduled ones and manual `create job --from` ones
+# (all named receipts-pg-backup-*). It fails closed: a kubectl error or the 30-minute timeout
+# stops here (non-zero exit), and you must not go on with the restore until it passes.
+(
+  deadline=$((SECONDS + 1800))
+  while :; do
+    out=$(kubectl -n receipts get jobs -o jsonpath='{range .items[?(@.status.active)]}{.metadata.name}{"\n"}{end}') || { echo "kubectl failed; NOT safe to restore"; exit 1; }
+    active=$(printf '%s\n' "$out" | grep '^receipts-pg-backup' || true)
+    [ -z "$active" ] && { echo "no backup running"; exit 0; }
+    [ "$SECONDS" -ge "$deadline" ] && { echo "timed out waiting for: $active"; exit 1; }
+    echo "waiting for: $active"; sleep 5
+  done
+) || echo "STOP: do not restore yet"
 kubectl -n receipts scale deploy/receipts-api --replicas=0
 # the app=receipts-backup label is what the NetworkPolicy lets reach Postgres
 kubectl -n receipts run pg-restore --rm -it --restart=Never --labels=app=receipts-backup --image=postgres:16-bookworm \

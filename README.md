@@ -92,7 +92,7 @@ The API includes a complete Receipts CRUD API:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/v1/health` | Health check endpoint |
-| GET | `/readyz` | Readiness: 200 when the database answers a ping within 2s, else 503 (k8s readiness probe) |
+| GET | `/readyz` | Readiness: 200 when the database answers a ping within 2s **and** its applied migrations match this binary's (none missing, none unknown), else 503 (k8s readiness probe) |
 | GET | `/api/v1/receipts` | List all receipts |
 | GET | `/api/v1/receipts/{id}` | Get a single receipt |
 | POST | `/api/v1/receipts` | Create a new receipt |
@@ -319,6 +319,24 @@ The template includes a `products` table with:
 
 ### Migrations
 - Migration files: `migrations/`
+- 014 (phase 7) dropped the legacy `receipts.store_category/store_address/store_phone` columns and
+  renamed `store_name` to `printed_merchant_name`. The API's `store_*` JSON fields are unchanged:
+  `store_name` is the printed name, category comes from `merchants`, and address, phone and
+  number come from `stores`.
+- Because those values now live on shared rows, a write that can't be stored gets **422** and
+  changes nothing. It is never a 200 that drops the value. This applies to `POST`/`PUT
+  /api/v1/receipts` and the web form:
+  - `store_category` is written to the merchant only if the merchant has no category yet. The
+    same value in any case is accepted. A different value is a 422, because changing it would
+    change every receipt of that merchant.
+  - `store_phone` is saved on the store row, so it needs `store_number` or `store_address` in the
+    same request. Without either, it's a 422. With one, it writes through to the store, like the
+    address does.
+  - `store_category`, `store_number` or `store_address` without a `store_name` is a 422.
+  - Photo extraction is lenient: it never fails a parse over these. It drops a phone that has no
+    store location and keeps the merchant's existing category.
+- 015 turns blank merchant categories and store addresses/phones into NULL. CHECK constraints keep
+  blanks out from then on.
 - Auto-run on startup
 - Uses `golang-migrate` library
 

@@ -76,16 +76,17 @@ trigram index from migration 006.
 
 **Plans**: 06-01 (phases/06-deploy) - see 06-01-SUMMARY.md
 
-### Phase 7: Legacy column cleanup (later)
+### Phase 7: Legacy column cleanup
 **Depends on**: Phases 2-4 (all readers on merchant_id/store_id)
 **Scope**: drop legacy receipts.store_* columns (store_name/category/address/phone as stored
 columns) once every reader uses merchants/stores; paired down migration restores them.
+**Status**: Executed on phase-07-store-cleanup (migrations 014 + 015), PR open - see phases/07-store-cleanup/07-01-SUMMARY.md
 
 ## Decisions (2026-10-27, Jack via CoS)
 - Never edit a migration that has already been pushed; add a new one (from 013 on).
 - Rolling back 004 collapses status to review_state ('auto'/'needs_review'/'reviewed'); accepted, documented in 004 down.
 - Case-insensitive merchant matching/merging (e.g. in store_spending_view) is intended.
-- Legacy store_* columns kept for now; cleanup is Phase 7.
+- Legacy store_* columns kept for now; cleanup is Phase 7 (done in migration 014; store_name kept as printed_merchant_name).
 - members FKs (member_id, uploaded_by_id, reviewed_by_id) stay nullable.
 
 ## Future ideas (not planned)

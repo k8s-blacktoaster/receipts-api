@@ -29,6 +29,8 @@ func TestReadiness(t *testing.T) {
 		{"timeout", Readiness{DB: hang, Timeout: 20 * time.Millisecond}, http.MethodGet, 503},
 		{"nil db", Readiness{}, http.MethodGet, 503},
 		{"post", Readiness{DB: ok}, http.MethodPost, 405},
+		{"schema ok", Readiness{DB: ok, Schema: func(context.Context) error { return nil }}, http.MethodGet, 200},
+		{"schema mismatch", Readiness{DB: ok, Schema: func(context.Context) error { return errors.New("schema mismatch") }}, http.MethodGet, 503},
 	}
 	for _, c := range cases {
 		start := time.Now()

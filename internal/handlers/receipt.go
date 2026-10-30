@@ -156,6 +156,10 @@ func (h *ReceiptHandler) CreateReceipt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.Create(ctx, &receipt); err != nil {
+		if errors.Is(err, repository.ErrStoreField) {
+			h.respondWithError(w, http.StatusUnprocessableEntity, err.Error()+"; receipt not created")
+			return
+		}
 		h.logger.Error("failed to create receipt", "error", err, "store_name", receipt.StoreName)
 		h.respondWithError(w, http.StatusInternalServerError, "Failed to create receipt")
 		return
@@ -214,6 +218,10 @@ func (h *ReceiptHandler) UpdateReceipt(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.Update(ctx, &receipt); err != nil {
+		if errors.Is(err, repository.ErrStoreField) {
+			h.respondWithError(w, http.StatusUnprocessableEntity, err.Error()+"; receipt unchanged")
+			return
+		}
 		if errors.Is(err, repository.ErrReceiptBusy) {
 			h.respondWithError(w, http.StatusConflict, "Receipt is queued for or being extracted; retry after extraction finishes (receipt unchanged)")
 			return
