@@ -230,13 +230,7 @@ never the location line).
 
 **API key:** `XAI_API_KEY` is read only from the environment. Never commit it. In Kubernetes:
 
-```yaml
-# kubectl create secret generic receipts-api-xai --from-literal=XAI_API_KEY=...
-env:
-  - name: XAI_API_KEY
-    valueFrom:
-      secretKeyRef: { name: receipts-api-xai, key: XAI_API_KEY }
-```
+the helm chart maps the Vault property `xai-api-key` (ExternalSecret) to `XAI_API_KEY`; see DEPLOY.md.
 
 Without a key the API still accepts uploads; they stay `uploaded` until a provider is configured
 (they are re-queued on startup).
@@ -376,6 +370,7 @@ EXTRACTION_TIMEOUT_SECONDS=300
 XAI_API_KEY=              # never commit
 EXTRACTION_SHUTDOWN_TIMEOUT=25  # seconds SIGTERM waits for in-flight extractions
 EXTRACTION_STALE_SWEEP_INTERVAL=60  # seconds between stale-parsing sweeps (0 = off)
+IMAGE_DECODE_BUDGET_BYTES=0  # decoded-bitmap bytes in flight across uploads (0 = 200 MiB, OPS-07)
 ```
 
 ### Testing
@@ -445,27 +440,11 @@ CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o bin/api cmd/api/main.
 
 ## Production Deployment
 
-1. **Environment Variables:**
-   - Set `DATABASE_URL` to your production PostgreSQL
-   - Set `ENVIRONMENT=production`
-   - Set `LOG_LEVEL=info` or `warn`
-
-2. **Build and Deploy:**
-   ```bash
-   # Build for Linux
-   CGO_ENABLED=0 GOOS=linux go build -o api cmd/api/main.go
-   
-   # Run migrations (if needed)
-   migrate -path migrations -database $DATABASE_URL up
-   
-   # Start the API
-   ./api
-   ```
-
-3. **Health Check:**
-   ```bash
-   curl http://your-api-url/api/v1/health
-   ```
+receipts-api deploys to the k3s cluster with the helm chart in `helm/`. CI
+(`.github/workflows/build-api.yml`) builds and pushes `registry.k8s.blacktoaster.com/receipts/api:<sha7>`
+after vet, unit and Postgres integration tests pass. Secrets come from Vault `apps/receipts/app`
+(`xai-api-key`, `mcp-token`, `db-password`) through an ExternalSecret.
+**See [DEPLOY.md](DEPLOY.md)** for the Vault keys, deploy, smoke test, rollback and restore steps.
 
 ## Customizing for Your Domain
 
