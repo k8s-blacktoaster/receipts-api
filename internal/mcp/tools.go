@@ -40,23 +40,33 @@ var (
 	pTo       = map[string]any{"type": "string", "format": "date", "description": "Inclusive end date YYYY-MM-DD"}
 	pLimit    = map[string]any{"type": "integer", "minimum": 1, "maximum": maxLimit, "description": "Max rows (default 50)"}
 	pProduct  = map[string]any{"type": "integer", "minimum": 1, "description": "Product id (from search_products)"}
+	pReview   = map[string]any{"type": "boolean", "default": false, "description": "Also count receipts still in needs_review (default false: only parsed and reviewed receipts)"}
 )
+
+// reviewField is embedded in every tool's arguments (phase 5.1: needs_review is opt-in).
+type reviewField struct {
+	IncludeNeedsReview bool `json:"include_needs_review"`
+}
+
+func (r reviewField) scope() repository.Scope {
+	return repository.Scope{IncludeNeedsReview: r.IncludeNeedsReview}
+}
 
 // Tools returns the read-only tool set (MCP-01, MCP-05).
 func Tools(d Deps) []Tool {
 	return []Tool{
 		{Name: "list_merchants", Description: "List merchants (normalized names) with counted receipt count, total spent (cents), last visit date and last receipt id.",
-			InputSchema: obj(map[string]any{}), Call: d.listMerchants},
+			InputSchema: obj(map[string]any{"include_needs_review": pReview}), Call: d.listMerchants},
 		{Name: "search_products", Description: "Find canonical products by name, alias text or UPC. Each hit includes its most recent purchase (receipt id + date) when there is one.",
-			InputSchema: obj(map[string]any{"query": map[string]any{"type": "string", "minLength": 1}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 50}}, "query"), Call: d.searchProducts},
+			InputSchema: obj(map[string]any{"query": map[string]any{"type": "string", "minLength": 1}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 50}, "include_needs_review": pReview}, "query"), Call: d.searchProducts},
 		{Name: "search_purchases", Description: "Search purchased line items by text (item name, printed text or mapped product name), optionally by merchant and date range. Newest first, with receipt ids and dates.",
-			InputSchema: obj(map[string]any{"query": map[string]any{"type": "string", "minLength": 1}, "merchant": pMerchant, "from": pFrom, "to": pTo, "limit": pLimit}, "query"), Call: d.searchPurchases},
+			InputSchema: obj(map[string]any{"query": map[string]any{"type": "string", "minLength": 1}, "merchant": pMerchant, "from": pFrom, "to": pTo, "limit": pLimit, "include_needs_review": pReview}, "query"), Call: d.searchPurchases},
 		{Name: "where_bought", Description: "Where did I buy a product: each merchant + store location with last purchase date/price and receipt ids, plus the individual purchases newest first.",
-			InputSchema: obj(map[string]any{"product_id": pProduct, "limit": pLimit}, "product_id"), Call: d.whereBought},
+			InputSchema: obj(map[string]any{"product_id": pProduct, "limit": pLimit, "include_needs_review": pReview}, "product_id"), Call: d.whereBought},
 		{Name: "spend", Description: "Total spend (receipt totals, cents) over an optional merchant and date range, grouped by merchant or month, with the receipt ids in each group.",
-			InputSchema: obj(map[string]any{"merchant": pMerchant, "from": pFrom, "to": pTo, "group_by": map[string]any{"type": "string", "enum": []string{"merchant", "month"}}}), Call: d.spend},
+			InputSchema: obj(map[string]any{"merchant": pMerchant, "from": pFrom, "to": pTo, "group_by": map[string]any{"type": "string", "enum": []string{"merchant", "month"}}, "include_needs_review": pReview}), Call: d.spend},
 		{Name: "price_history", Description: "Unit price paid for a product over time (oldest first), optionally at one merchant, with receipt ids and dates.",
-			InputSchema: obj(map[string]any{"product_id": pProduct, "merchant": pMerchant, "limit": pLimit}, "product_id"), Call: d.priceHistory},
+			InputSchema: obj(map[string]any{"product_id": pProduct, "merchant": pMerchant, "limit": pLimit, "include_needs_review": pReview}, "product_id"), Call: d.priceHistory},
 	}
 }
 
@@ -72,8 +82,8 @@ func decodeArgs(raw json.RawMessage, v any) error {
 	}
 	allowed := map[string]bool{}
 	rt := reflect.TypeOf(v).Elem()
-	for i := 0; i < rt.NumField(); i++ {
-		if tag, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ","); tag != "" {
+	for _, f := range reflect.VisibleFields(rt) {
+		if tag, _, _ := strings.Cut(f.Tag.Get("json"), ","); tag != "" && !f.Anonymous {
 			allowed[tag] = true
 		}
 	}
@@ -88,9 +98,9 @@ func decodeArgs(raw json.RawMessage, v any) error {
 		return bad("invalid arguments: %v", err)
 	}
 	rv := reflect.ValueOf(v).Elem()
-	for i := 0; i < rv.NumField(); i++ {
-		if f := rv.Field(i); f.Kind() == reflect.String && strings.ContainsRune(f.String(), 0) {
-			return bad("%s must not contain NUL bytes", rt.Field(i).Tag.Get("json"))
+	for _, sf := range reflect.VisibleFields(rt) {
+		if f := rv.FieldByIndex(sf.Index); f.Kind() == reflect.String && strings.ContainsRune(f.String(), 0) {
+			return bad("%s must not contain NUL bytes", sf.Tag.Get("json"))
 		}
 	}
 	return nil
@@ -131,11 +141,11 @@ func checkLimit(n, max int) (int, error) {
 }
 
 // merchantID resolves an optional merchant argument (MCP-04/06). Empty -> 0 (any).
-func (d Deps) merchantID(ctx context.Context, name string) (int64, *models.MerchantSummary, error) {
+func (d Deps) merchantID(ctx context.Context, name string, sc repository.Scope) (int64, *models.MerchantSummary, error) {
 	if strings.TrimSpace(name) == "" {
 		return 0, nil, nil
 	}
-	m, cands, err := d.Query.ResolveMerchant(ctx, name, 5)
+	m, cands, err := d.Query.ResolveMerchant(ctx, name, 5, sc)
 	if errors.Is(err, repository.ErrInvalidMerchantName) {
 		return 0, nil, bad("merchant name must contain a letter or digit")
 	}
@@ -150,14 +160,15 @@ func (d Deps) merchantID(ctx context.Context, name string) (int64, *models.Merch
 }
 
 func (d Deps) listMerchants(ctx context.Context, raw json.RawMessage) (any, error) {
-	if err := decodeArgs(raw, &struct{}{}); err != nil {
+	var a reviewField
+	if err := decodeArgs(raw, &a); err != nil {
 		return nil, err
 	}
-	ms, err := d.Query.ListMerchants(ctx)
+	ms, err := d.Query.ListMerchants(ctx, a.scope())
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"merchants": ms, "counted_statuses": repository.CountedStatuses}, nil
+	return map[string]any{"merchants": ms, "counted_statuses": a.scope().Statuses()}, nil
 }
 
 type productHit struct {
@@ -167,6 +178,7 @@ type productHit struct {
 
 func (d Deps) searchProducts(ctx context.Context, raw json.RawMessage) (any, error) {
 	var a struct {
+		reviewField
 		Query string `json:"query"`
 		Limit int    `json:"limit"`
 	}
@@ -188,7 +200,7 @@ func (d Deps) searchProducts(ctx context.Context, raw json.RawMessage) (any, err
 	for i, p := range ps {
 		ids[i] = p.ID
 	}
-	last, err := d.Query.LastPurchases(ctx, ids)
+	last, err := d.Query.LastPurchases(ctx, ids, a.scope())
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +211,7 @@ func (d Deps) searchProducts(ctx context.Context, raw json.RawMessage) (any, err
 			hits[i].LastPurchase = &l
 		}
 	}
-	return map[string]any{"products": hits}, nil
+	return map[string]any{"products": hits, "counted_statuses": a.scope().Statuses()}, nil
 }
 
 func linesResult(key string, lines []models.PurchaseLine, truncated bool, extra map[string]any) map[string]any {
@@ -222,6 +234,7 @@ func receiptIDs(lines []models.PurchaseLine) []int64 {
 
 func (d Deps) searchPurchases(ctx context.Context, raw json.RawMessage) (any, error) {
 	var a struct {
+		reviewField
 		Query    string `json:"query"`
 		Merchant string `json:"merchant"`
 		From     string `json:"from"`
@@ -241,15 +254,15 @@ func (d Deps) searchPurchases(ctx context.Context, raw json.RawMessage) (any, er
 	if err != nil {
 		return nil, err
 	}
-	mid, m, err := d.merchantID(ctx, a.Merchant)
+	mid, m, err := d.merchantID(ctx, a.Merchant, a.scope())
 	if err != nil {
 		return nil, err
 	}
-	lines, truncated, err := d.Query.SearchPurchases(ctx, repository.PurchaseFilter{Query: a.Query, MerchantID: mid, From: a.From, To: a.To, Limit: limit})
+	lines, truncated, err := d.Query.SearchPurchases(ctx, repository.PurchaseFilter{Query: a.Query, MerchantID: mid, From: a.From, To: a.To, Limit: limit, Scope: a.scope()})
 	if err != nil {
 		return nil, err
 	}
-	return linesResult("purchases", lines, truncated, map[string]any{"merchant": m}), nil
+	return linesResult("purchases", lines, truncated, map[string]any{"merchant": m, "counted_statuses": a.scope().Statuses()}), nil
 }
 
 func (d Deps) product(ctx context.Context, id int64) (*models.Product, error) {
@@ -265,6 +278,7 @@ func (d Deps) product(ctx context.Context, id int64) (*models.Product, error) {
 
 func (d Deps) whereBought(ctx context.Context, raw json.RawMessage) (any, error) {
 	var a struct {
+		reviewField
 		ProductID int64 `json:"product_id"`
 		Limit     int   `json:"limit"`
 	}
@@ -279,16 +293,17 @@ func (d Deps) whereBought(ctx context.Context, raw json.RawMessage) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	wb, err := d.Query.WhereBought(ctx, p.ID, limit)
+	wb, err := d.Query.WhereBought(ctx, p.ID, limit, a.scope())
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{"product": p, "locations": wb.Locations, "purchases": wb.Purchases,
-		"truncated": wb.Truncated, "receipt_ids": receiptIDs(wb.Purchases)}, nil
+		"truncated": wb.Truncated, "receipt_ids": receiptIDs(wb.Purchases), "counted_statuses": a.scope().Statuses()}, nil
 }
 
 func (d Deps) spend(ctx context.Context, raw json.RawMessage) (any, error) {
 	var a struct {
+		reviewField
 		Merchant string `json:"merchant"`
 		From     string `json:"from"`
 		To       string `json:"to"`
@@ -303,11 +318,11 @@ func (d Deps) spend(ctx context.Context, raw json.RawMessage) (any, error) {
 	if a.GroupBy != "" && a.GroupBy != "merchant" && a.GroupBy != "month" {
 		return nil, bad(`group_by must be "merchant" or "month"`)
 	}
-	mid, m, err := d.merchantID(ctx, a.Merchant)
+	mid, m, err := d.merchantID(ctx, a.Merchant, a.scope())
 	if err != nil {
 		return nil, err
 	}
-	groups, err := d.Query.Spend(ctx, repository.SpendFilter{MerchantID: mid, From: a.From, To: a.To, GroupBy: a.GroupBy})
+	groups, err := d.Query.Spend(ctx, repository.SpendFilter{MerchantID: mid, From: a.From, To: a.To, GroupBy: a.GroupBy, Scope: a.scope()})
 	if err != nil {
 		return nil, err
 	}
@@ -318,7 +333,7 @@ func (d Deps) spend(ctx context.Context, raw json.RawMessage) (any, error) {
 		n += g.ReceiptCount
 	}
 	return map[string]any{"merchant": m, "from": a.From, "to": a.To, "group_by": cmpOr(a.GroupBy, "merchant"),
-		"total_cents": total, "receipt_count": n, "groups": groups, "counted_statuses": repository.CountedStatuses}, nil
+		"total_cents": total, "receipt_count": n, "groups": groups, "counted_statuses": a.scope().Statuses()}, nil
 }
 
 func cmpOr(s, def string) string {
@@ -330,6 +345,7 @@ func cmpOr(s, def string) string {
 
 func (d Deps) priceHistory(ctx context.Context, raw json.RawMessage) (any, error) {
 	var a struct {
+		reviewField
 		ProductID int64  `json:"product_id"`
 		Merchant  string `json:"merchant"`
 		Limit     int    `json:"limit"`
@@ -345,13 +361,13 @@ func (d Deps) priceHistory(ctx context.Context, raw json.RawMessage) (any, error
 	if err != nil {
 		return nil, err
 	}
-	mid, m, err := d.merchantID(ctx, a.Merchant)
+	mid, m, err := d.merchantID(ctx, a.Merchant, a.scope())
 	if err != nil {
 		return nil, err
 	}
-	lines, truncated, err := d.Query.PriceHistory(ctx, p.ID, mid, limit)
+	lines, truncated, err := d.Query.PriceHistory(ctx, p.ID, mid, limit, a.scope())
 	if err != nil {
 		return nil, err
 	}
-	return linesResult("purchases", lines, truncated, map[string]any{"product": p, "merchant": m}), nil
+	return linesResult("purchases", lines, truncated, map[string]any{"product": p, "merchant": m, "counted_statuses": a.scope().Statuses()}), nil
 }

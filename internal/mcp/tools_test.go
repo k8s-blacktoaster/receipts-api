@@ -18,11 +18,13 @@ type fakeQuery struct {
 	lines     []models.PurchaseLine
 	truncated bool
 	wbLimit   int
+	scopes    []repository.Scope
 }
 
-func (f *fakeQuery) ResolveMerchant(_ context.Context, name string, _ int) (*models.MerchantSummary, []models.MerchantCandidate, error) {
+func (f *fakeQuery) ResolveMerchant(_ context.Context, name string, _ int, sc repository.Scope) (*models.MerchantSummary, []models.MerchantCandidate, error) {
 	key := models.NormalizeMerchantName(name)
 	f.resolved = append(f.resolved, key)
+	f.scopes = append(f.scopes, sc)
 	switch key {
 	case "":
 		return nil, nil, repository.ErrInvalidMerchantName
@@ -31,18 +33,21 @@ func (f *fakeQuery) ResolveMerchant(_ context.Context, name string, _ int) (*mod
 	}
 	return nil, []models.MerchantCandidate{{ID: 7, Name: "trader_joes", Similarity: 0.4}}, nil
 }
-func (f *fakeQuery) ListMerchants(context.Context) ([]models.MerchantSummary, error) {
+func (f *fakeQuery) ListMerchants(_ context.Context, sc repository.Scope) ([]models.MerchantSummary, error) {
+	f.scopes = append(f.scopes, sc)
 	return []models.MerchantSummary{{ID: 7, Name: "trader_joes", ReceiptCount: 2, LastVisit: "2026-02-01", LastReceiptID: 11}}, nil
 }
 func (f *fakeQuery) SearchPurchases(_ context.Context, pf repository.PurchaseFilter) ([]models.PurchaseLine, bool, error) {
 	f.searchF = pf
 	return f.lines, f.truncated, nil
 }
-func (f *fakeQuery) PriceHistory(_ context.Context, _, _ int64, _ int) ([]models.PurchaseLine, bool, error) {
+func (f *fakeQuery) PriceHistory(_ context.Context, _, _ int64, _ int, sc repository.Scope) ([]models.PurchaseLine, bool, error) {
+	f.scopes = append(f.scopes, sc)
 	return f.lines, f.truncated, nil
 }
-func (f *fakeQuery) WhereBought(_ context.Context, _ int64, limit int) (*models.WhereBought, error) {
+func (f *fakeQuery) WhereBought(_ context.Context, _ int64, limit int, sc repository.Scope) (*models.WhereBought, error) {
 	f.wbLimit = limit
+	f.scopes = append(f.scopes, sc)
 	return &models.WhereBought{Locations: []models.ProductLocation{{MerchantID: 8, MerchantName: "corner_grocer", Purchases: 1,
 		LastDate: "2026-02-20", LastUnitPriceCents: 1100, ReceiptIDs: []int64{12}}}, Purchases: f.lines, Truncated: f.truncated}, nil
 }
@@ -50,7 +55,8 @@ func (f *fakeQuery) Spend(_ context.Context, sf repository.SpendFilter) ([]model
 	f.spendF = sf
 	return []models.SpendGroup{{Key: "trader_joes", ReceiptCount: 2, TotalCents: 4000, ReceiptIDs: []int64{11, 10}}}, nil
 }
-func (f *fakeQuery) LastPurchases(context.Context, []int64) (map[int64]models.PurchaseLine, error) {
+func (f *fakeQuery) LastPurchases(_ context.Context, _ []int64, sc repository.Scope) (map[int64]models.PurchaseLine, error) {
+	f.scopes = append(f.scopes, sc)
 	return map[int64]models.PurchaseLine{1: {ReceiptID: 11, PurchaseDate: "2026-02-01"}}, nil
 }
 
@@ -204,5 +210,59 @@ func TestArgumentValidation(t *testing.T) {
 	}
 	if out, isErr := call(t, fq, "search_purchases", `{"query":"x","from":"0001-01-01"}`); isErr {
 		t.Errorf("year 1 rejected %v", out)
+	}
+}
+
+// Phase 5.1: needs_review receipts are excluded by default; every tool takes
+// include_needs_review to opt in, and reports the statuses it counted.
+func TestIncludeNeedsReviewScope(t *testing.T) {
+	cases := []struct{ tool, args string }{
+		{"list_merchants", `{}`},
+		{"search_products", `{"query":"coffee"}`},
+		{"search_purchases", `{"query":"coffee","merchant":"Trader Joe's"}`},
+		{"where_bought", `{"product_id":1}`},
+		{"spend", `{"merchant":"Trader Joe's"}`},
+		{"price_history", `{"product_id":1,"merchant":"Trader Joe's"}`},
+	}
+	for _, c := range cases {
+		for _, incl := range []bool{false, true} {
+			fq := &fakeQuery{}
+			args := c.args
+			if incl {
+				args = strings.TrimSuffix(args, "}")
+				if args != "{" {
+					args += ","
+				}
+				args += `"include_needs_review":true}`
+			}
+			out, isErr := call(t, fq, c.tool, args)
+			if isErr {
+				t.Fatalf("%s %s: error %v", c.tool, args, out)
+			}
+			scopes := append([]repository.Scope{fq.spendF.Scope, fq.searchF.Scope}, fq.scopes...)
+			seen := false
+			for _, sc := range scopes {
+				if sc.IncludeNeedsReview {
+					seen = true
+				}
+			}
+			if seen != incl {
+				t.Fatalf("%s %s: scopes %+v, want include=%v", c.tool, args, scopes, incl)
+			}
+			if c.tool != "search_purchases" && c.tool != "spend" && len(fq.scopes) == 0 {
+				t.Fatalf("%s: no scoped query", c.tool)
+			}
+			st, _ := json.Marshal(out["counted_statuses"])
+			if strings.Contains(string(st), "needs_review") != incl {
+				t.Fatalf("%s include=%v counted_statuses %s", c.tool, incl, st)
+			}
+		}
+		bad := `{"include_needs_review":"yes"}`
+		if c.args != `{}` {
+			bad = strings.Replace(c.args, "{", `{"include_needs_review":"yes",`, 1)
+		}
+		if out, isErr := call(t, &fakeQuery{}, c.tool, bad); !isErr {
+			t.Fatalf("%s: string include_needs_review accepted: %v", c.tool, out)
+		}
 	}
 }
