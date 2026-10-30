@@ -78,6 +78,8 @@ spec:
               volumeMounts:
                 - name: backups
                   mountPath: /backups
+                - name: tmp
+                  mountPath: /tmp
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
@@ -86,6 +88,8 @@ spec:
               resources:
                 {{- toYaml .Values.backup.resources | nindent 16 }}
           volumes:
+            - name: tmp
+              emptyDir: {}
             - name: backups
               persistentVolumeClaim:
                 claimName: {{ .Release.Name }}-backups

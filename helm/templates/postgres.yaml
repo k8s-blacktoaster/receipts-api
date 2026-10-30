@@ -31,8 +31,16 @@ spec:
       labels:
         app: {{ .Release.Name }}-postgres
     spec:
+      # Runs as the image's postgres user (999). fsGroup makes the PVC writable; the entrypoint
+      # creates PGDATA (a subdir, so lost+found is never in it) as 999 with mode 0700.
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
         fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgres
           image: {{ .Values.postgres.image }}
@@ -56,9 +64,18 @@ spec:
               value: {{ .Values.postgres.locale }}
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+            - name: run          # unix socket + lock file (read-only root fs)
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", "{{ .Values.postgres.user }}", "-d", "{{ .Values.postgres.database }}"]
@@ -71,6 +88,12 @@ spec:
             periodSeconds: 30
           resources:
             {{- toYaml .Values.postgres.resources | nindent 12 }}
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
   volumeClaimTemplates:
     - metadata:
         name: data
