@@ -6,6 +6,9 @@
 **Last updated:** 2026-10-29
 
 ## Notes
+- 2026-10-29 phase 7 on phase-07-store-cleanup: migration 014 drops receipts.store_category/
+  store_address/store_phone (copied into merchants/stores first), renames store_name ->
+  printed_merchant_name. API JSON unchanged. See phases/07-store-cleanup/07-01-SUMMARY.md.
 - 2026-10-29 phase 6 (deploy readiness) on phase-06-deploy, independent of 5.1: Dockerfile, helm
   chart, build-api CI, ExternalSecret apps/receipts/app, pg_dump CronJob, UTF-8 initdb, OPS-07
   decode budget, DEPLOY.md. Nothing applied to the cluster. See phases/06-deploy/06-01-SUMMARY.md.

@@ -319,6 +319,10 @@ The template includes a `products` table with:
 
 ### Migrations
 - Migration files: `migrations/`
+- 014 (phase 7) dropped the legacy `receipts.store_category/store_address/store_phone` columns and
+  renamed `store_name` to `printed_merchant_name`. The API's `store_*` JSON fields are unchanged:
+  `store_name` is the printed name, category comes from `merchants`, and address, phone and
+  number come from `stores`.
 - Auto-run on startup
 - Uses `golang-migrate` library
 
