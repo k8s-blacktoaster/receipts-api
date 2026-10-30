@@ -1,0 +1,6 @@
+apiVersion: v2
+name: receipts
+description: receipts-api - Go API + embedded web UI + MCP endpoint, Postgres StatefulSet, nightly pg_dump backups, cert-manager TLS.
+type: application
+version: 0.1.0
+appVersion: "0.6.0"

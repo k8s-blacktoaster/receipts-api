@@ -120,9 +120,15 @@ func Normalize(ctx context.Context, data []byte, heic HEICDecoder) (*Result, err
 		if err != nil {
 			return nil, ErrCorrupt
 		}
-		if err := checkSize(cfg.Width, cfg.Height, bytesPerPixel(cfg.ColorModel)); err != nil {
+		bpp := bytesPerPixel(cfg.ColorModel)
+		if err := checkSize(cfg.Width, cfg.Height, bpp); err != nil {
 			return nil, err
 		}
+		release, err := acquireDecode(ctx, cfg.Width, cfg.Height, bpp)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
 		if img, _, err = image.Decode(bytes.NewReader(data)); err != nil {
 			return nil, ErrCorrupt
 		}
@@ -142,7 +148,11 @@ func Normalize(ctx context.Context, data []byte, heic HEICDecoder) (*Result, err
 		if err := checkSize(w, h, 8); err != nil {
 			return nil, err
 		}
-		var err error
+		release, err := acquireDecode(ctx, w, h, 8)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
 		if img, err = heic.Decode(ctx, data); err != nil {
 			if errors.Is(err, ErrTooLarge) {
 				return nil, err
@@ -163,6 +173,16 @@ func Normalize(ctx context.Context, data []byte, heic HEICDecoder) (*Result, err
 	}
 	b := img.Bounds()
 	return &Result{JPEG: out.Bytes(), Width: b.Dx(), Height: b.Dy(), Source: kind}, nil
+}
+
+// acquireDecode reserves the decoded size of a w x h image in the global budget (OPS-07).
+func acquireDecode(ctx context.Context, w, h int, bpp int64) (func(), error) {
+	b := decodeBudget
+	n, err := b.Acquire(ctx, decodeWeight(w, h, bpp))
+	if err != nil {
+		return nil, err
+	}
+	return func() { b.Release(n) }, nil
 }
 
 // fit scales img down so its long edge is <= max (never up).

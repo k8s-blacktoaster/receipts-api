@@ -1,0 +1,112 @@
+# Deploy with (see DEPLOY.md):
+#   helm upgrade --install receipts ./helm -n receipts --create-namespace
+# api.tag is bumped per deploy to the immutable sha7 the CI workflow publishes.
+
+namespace: receipts
+
+# VPN-only hostname. API, web UI and /mcp are all served by the one api Service.
+host: receipts.k8s.blacktoaster.com
+
+api:
+  image: registry.k8s.blacktoaster.com/receipts/api
+  tag: "CHANGE-ME"          # sha7 from the build-api workflow summary
+  pullPolicy: IfNotPresent  # tags are immutable sha7s
+  # One replica: the extraction worker and the RWO uploads volume are per-process.
+  replicas: 1
+  environment: production
+  logLevel: info
+  extraction:
+    provider: xai
+    model: ""               # empty = app default (grok-4.7)
+    reasoningEffort: low
+    timeoutSeconds: 300
+    workers: 2
+  maxUploadBytes: 20971520  # 20 MiB; keep ingress proxy-body-size above this
+  # OPS-07: decoded-bitmap budget across all uploads. 209715200 (200 MiB) = one max-size
+  # image (e.g. 7000x7000) at a time. Two such decodes peaked ~1.9 GB RSS in phase 3 QA.
+  imageDecodeBudgetBytes: 209715200
+  # GOMEMLIMIT keeps the Go GC under the container limit (~80% of limits.memory).
+  goMemLimit: 1200MiB
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1536Mi
+  uploads:
+    size: 10Gi
+    className: ""           # empty = cluster default
+
+postgres:
+  # Debian-based image (glibc): en_US.UTF-8 is generated in the image, so lower()/pg_trgm
+  # case folding matches Go for non-ASCII names (OPS-03). Avoid -alpine (musl locales).
+  image: postgres:16-bookworm
+  database: receipts
+  user: receipts
+  locale: en_US.UTF-8
+  storage:
+    size: 5Gi
+    className: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# OPS-02: nightly pg_dump (custom format) to a PVC, keeping the newest `keep` dumps.
+backup:
+  enabled: true
+  schedule: "17 3 * * *"    # 03:17 cluster time
+  keep: 14
+  storage:
+    size: 5Gi
+    className: ""
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# Ingress-only NetworkPolicies (default deny + allow-list); egress is unrestricted.
+# ASSUMPTION: ingress-nginx runs in namespace "ingress-nginx" with the upstream chart's pod
+# label (world-cup-site has no NetworkPolicy to copy). Check with:
+#   kubectl get pods -A -l app.kubernetes.io/name=ingress-nginx --show-labels
+networkPolicy:
+  enabled: true
+  ingressController:
+    namespace: ingress-nginx
+    podLabels:
+      app.kubernetes.io/name: ingress-nginx
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/proxy-body-size: "25m"
+  tlsSecretName: receipts-tls
+
+certificate:
+  enabled: true
+  name: receipts
+  issuerRef:
+    name: vault-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+
+externalDNS:
+  target: in.k8s.blacktoaster.com
+
+# Secrets come from Vault via External Secrets Operator (ClusterSecretStore vault-backend).
+# Nothing secret lives in this file. See DEPLOY.md for the keys to create.
+externalSecrets:
+  enabled: true
+  secretStore: vault-backend
+  vaultKey: apps/receipts/app
+  refreshInterval: 1m

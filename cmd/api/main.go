@@ -138,6 +138,8 @@ func main() {
 	}
 	uploadHandler := &handlers.UploadHandler{Store: docRepo, Receipts: receiptRepo, Blobs: blobs,
 		MaxBytes: cfg.MaxUploadBytes, Logger: logger, KeepOriginal: cfg.KeepOriginalUploads}
+	imaging.SetDecodeBudget(cfg.ImageDecodeBudgetBytes)
+	logger.Info("image decode budget", "bytes", imaging.DecodeBudget().Cap())
 	if dec := imaging.FindHEICDecoder(cfg.HEICDecoder); dec != nil {
 		uploadHandler.HEIC = dec // avoid a typed-nil interface
 		logger.Info("HEIC uploads enabled", "decoder", dec.Name())
@@ -159,7 +161,7 @@ func main() {
 		ui.Queue = queue
 	}
 	productHandler := &handlers.ProductHandler{Products: repository.NewProductRepository(db), Logger: logger}
-	var mounts []router.Mount
+	mounts := []router.Mount{{Path: "/readyz", Handler: handlers.Readiness{DB: db, Timeout: 2 * time.Second}}}
 	if cfg.MCPToken != "" {
 		mcpServer := &mcp.Server{Name: "receipts-api", Version: "1.0", Logger: logger,
 			Tools: mcp.Tools(mcp.Deps{Query: repository.NewQueryRepository(db), Products: repository.NewProductRepository(db)})}

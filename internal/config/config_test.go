@@ -85,3 +85,19 @@ func TestMCPToken(t *testing.T) {
 		t.Fatalf("token: %v", err)
 	}
 }
+
+func TestImageDecodeBudget(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x/y_test")
+	t.Setenv("IMAGE_DECODE_BUDGET_BYTES", "")
+	if cfg, err := Load(); err != nil || cfg.ImageDecodeBudgetBytes != 0 {
+		t.Fatalf("default: %v %v", cfg, err)
+	}
+	t.Setenv("IMAGE_DECODE_BUDGET_BYTES", "419430400")
+	if cfg, err := Load(); err != nil || cfg.ImageDecodeBudgetBytes != 400<<20 {
+		t.Fatalf("set: %v %v", cfg, err)
+	}
+	t.Setenv("IMAGE_DECODE_BUDGET_BYTES", "-1")
+	if _, err := Load(); err == nil {
+		t.Fatal("negative budget must fail")
+	}
+}

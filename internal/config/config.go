@@ -39,6 +39,9 @@ type Config struct {
 	ExtractionSweepSec       int
 	ExtractionWorkers        int
 	ExtractionToleranceCents int64
+	// ImageDecodeBudgetBytes bounds the decoded bitmaps in flight across all uploads (OPS-07);
+	// 0 = imaging.DefaultDecodeBudgetBytes (200 MiB, one maximum-size image at a time).
+	ImageDecodeBudgetBytes int64
 	// MCPToken is the bearer token for POST /mcp (phase 5). Empty disables the endpoint.
 	MCPToken string
 }
@@ -71,6 +74,7 @@ func Load() (*Config, error) {
 		ExtractionSweepSec:        getEnvAsInt("EXTRACTION_STALE_SWEEP_INTERVAL", 60),
 		ExtractionWorkers:         getEnvAsInt("EXTRACTION_WORKERS", 2),
 		ExtractionToleranceCents:  int64(getEnvAsInt("EXTRACTION_TOLERANCE_CENTS", 2)),
+		ImageDecodeBudgetBytes:    int64(getEnvAsInt("IMAGE_DECODE_BUDGET_BYTES", 0)),
 		MCPToken:                  strings.TrimSpace(os.Getenv("MCP_TOKEN")),
 	}
 
@@ -109,6 +113,9 @@ func (c *Config) Validate() error {
 	case "", "none", "low", "medium", "high", "xhigh":
 	default:
 		return fmt.Errorf("invalid EXTRACTION_REASONING_EFFORT: must be empty, none, low, medium, high or xhigh")
+	}
+	if c.ImageDecodeBudgetBytes < 0 {
+		return fmt.Errorf("invalid IMAGE_DECODE_BUDGET_BYTES: must be >= 0 (0 = default)")
 	}
 	if c.ExtractionToleranceCents < 0 {
 		return fmt.Errorf("invalid EXTRACTION_TOLERANCE_CENTS: must be >= 0")

@@ -92,6 +92,7 @@ The API includes a complete Receipts CRUD API:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/v1/health` | Health check endpoint |
+| GET | `/readyz` | Readiness: 200 when the database answers a ping within 2s, else 503 (k8s readiness probe) |
 | GET | `/api/v1/receipts` | List all receipts |
 | GET | `/api/v1/receipts/{id}` | Get a single receipt |
 | POST | `/api/v1/receipts` | Create a new receipt |
@@ -230,13 +231,7 @@ never the location line).
 
 **API key:** `XAI_API_KEY` is read only from the environment. Never commit it. In Kubernetes:
 
-```yaml
-# kubectl create secret generic receipts-api-xai --from-literal=XAI_API_KEY=...
-env:
-  - name: XAI_API_KEY
-    valueFrom:
-      secretKeyRef: { name: receipts-api-xai, key: XAI_API_KEY }
-```
+the helm chart maps the Vault property `xai-api-key` (ExternalSecret) to `XAI_API_KEY`; see DEPLOY.md.
 
 Without a key the API still accepts uploads; they stay `uploaded` until a provider is configured
 (they are re-queued on startup).
@@ -245,7 +240,7 @@ Without a key the API still accepts uploads; they stay `uploaded` until a provid
 Read-only [Model Context Protocol](https://modelcontextprotocol.io) tools over Streamable HTTP at
 `POST /mcp` on the same server (JSON responses, stateless, no SSE; `GET /mcp` is 405).
 
-- **Auth:** `Authorization: Bearer $MCP_TOKEN`. `MCP_TOKEN` (>= 32 chars, e.g. `openssl rand -hex 32`)
+- **Auth:** `Authorization: Bearer $MCP_TOKEN`. `MCP_TOKEN` (at least 32 characters; generate with `openssl rand -hex 32`)
   is read from the environment; when it is unset the endpoint is not mounted. Requests with an
   `Origin` header from another host get 403. Keep it VPN-only like the rest of the app.
 - **Data:** only receipts with status `parsed` or `reviewed` by default. Every tool takes an optional
@@ -381,6 +376,7 @@ EXTRACTION_TIMEOUT_SECONDS=300
 XAI_API_KEY=              # never commit
 EXTRACTION_SHUTDOWN_TIMEOUT=25  # seconds SIGTERM waits for in-flight extractions
 EXTRACTION_STALE_SWEEP_INTERVAL=60  # seconds between stale-parsing sweeps (0 = off)
+IMAGE_DECODE_BUDGET_BYTES=0  # decoded-bitmap bytes in flight across uploads (0 = 200 MiB, OPS-07)
 ```
 
 ### Testing
@@ -450,27 +446,11 @@ CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o bin/api cmd/api/main.
 
 ## Production Deployment
 
-1. **Environment Variables:**
-   - Set `DATABASE_URL` to your production PostgreSQL
-   - Set `ENVIRONMENT=production`
-   - Set `LOG_LEVEL=info` or `warn`
-
-2. **Build and Deploy:**
-   ```bash
-   # Build for Linux
-   CGO_ENABLED=0 GOOS=linux go build -o api cmd/api/main.go
-   
-   # Run migrations (if needed)
-   migrate -path migrations -database $DATABASE_URL up
-   
-   # Start the API
-   ./api
-   ```
-
-3. **Health Check:**
-   ```bash
-   curl http://your-api-url/api/v1/health
-   ```
+receipts-api deploys to the k3s cluster with the helm chart in `helm/`. CI
+(`.github/workflows/build-api.yml`) builds and pushes `registry.k8s.blacktoaster.com/receipts/api:<sha7>`
+after vet, unit and Postgres integration tests pass. Secrets come from Vault `apps/receipts/app`
+(`xai-api-key`, `mcp-token`, `db-password`) through an ExternalSecret.
+**See [DEPLOY.md](DEPLOY.md)** for the Vault keys, deploy, smoke test, rollback and restore steps.
 
 ## Customizing for Your Domain
 

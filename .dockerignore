@@ -3,3 +3,7 @@
 .env.*
 testdata/golden-local
 data
+.planning
+tests/http/fixtures
+helm
+.github

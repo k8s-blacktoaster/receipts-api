@@ -1,0 +1,61 @@
+{{- if .Values.networkPolicy.enabled }}
+# Ingress-only policies: default-deny all ingress in the namespace, then allow
+#   ingress controller -> api:8080, api (incl. migrate init container) -> postgres:5432,
+#   backup job -> postgres:5432.
+# Egress is NOT restricted (api needs DNS + https to api.x.ai; images pull via the node).
+{{- $ns := .Values.namespace }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-default-deny-ingress
+  namespace: {{ $ns }}
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-api-from-ingress
+  namespace: {{ $ns }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Release.Name }}-api
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressController.namespace }}
+          {{- with .Values.networkPolicy.ingressController.podLabels }}
+          podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-postgres-from-app
+  namespace: {{ $ns }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Release.Name }}-postgres
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: {{ .Release.Name }}-api
+        - podSelector:
+            matchLabels:
+              app: {{ .Release.Name }}-backup
+      ports:
+        - protocol: TCP
+          port: 5432
+{{- end }}
