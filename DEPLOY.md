@@ -93,6 +93,21 @@ running `ALTER ROLE receipts PASSWORD '...'` inside the database.
 Merge to `main` (or run the workflow manually: Actions -> build-api -> Run workflow). The job
 summary prints the sha7. It only pushes after vet, unit and Postgres integration tests pass.
 
+**If the run sits in "Queued" and never starts,** no runner can take it. The `[self-hosted, k3s]`
+runners are org-level, and their runner group must allow this repo. Go to Org settings ->
+Actions -> Runner groups -> (the group with the k3s runners) -> Repository access, then add
+`receipts-api` (or allow all repositories) and check that a runner is Idle/online. Then cancel any stale queued runs (they were queued
+before the runner had access; don't re-run them) and start a fresh build of `main`:
+
+```sh
+R=k8s-blacktoaster/receipts-api
+gh run list -R $R -w build-api -s queued --json databaseId -q '.[].databaseId' \
+  | xargs -n1 gh run cancel -R $R
+gh workflow run build-api -R $R --ref main
+sleep 5
+gh run watch -R $R $(gh run list -R $R -w build-api -L 1 --json databaseId -q '.[0].databaseId')
+```
+
 ## 3. Deploy
 
 ```sh
@@ -156,8 +171,8 @@ kubectl -n receipts delete job receipts-pg-backup-manual    # so the name can be
 ## 6. Roll back
 
 **Migrations are not all additive.** Migration 014 drops `receipts.store_category`,
-`store_address` and `store_phone` and renames `store_name` to `printed_merchant_name`. 015
-normalizes blank merchant and store fields to NULL. An image from before 014 running on a
+`store_address` and `store_phone` and renames `store_name` to `printed_merchant_name`. 015 and 016
+normalize blank merchant and store fields to NULL (016: any Go `strings.TrimSpace` whitespace). An image from before 014 running on a
 014+ database fails every receipt read with 500, while `/api/v1/health` stays 200. Images from
 this PR on also gate `/readyz` on the schema: when the applied migrations differ from the ones in
 the image (missing or unknown versions), the pod is not ready and the response lists the
@@ -186,7 +201,7 @@ schema.
    ```
 
 3. Migrate down with the current image. N = the number of migrations newer than the target image.
-   To go back to a pre-014 image, N=2 (015, then 014).
+   To go back to a pre-014 image, N=3 (016, then 015, then 014).
 
    ```sh
    # app=receipts-migrate: allowed to reach Postgres by the NetworkPolicy, but NOT selected by the
@@ -219,36 +234,61 @@ schema.
 - 014 up's writes to `merchants.category` and `stores.address`/`phone` stay; down doesn't undo
   them.
 
-`015` down is exact: it restores the blank values it replaced with NULL and drops its CHECKs.
+`016` and `015` down are exact for the data: they restore the blank values they replaced with NULL and
+put back the previous CHECKs. The restored rows do get `updated_at = now()`.
 
 The only full recovery from these losses is restoring the pre-upgrade backup (below).
 
 ## Restore from a backup
 
+Run the restore in three steps. Step 2 is a single `&&` chain that starts with the wait. If the
+wait fails (a kubectl error or the 30-minute timeout), it prints `STOP` and nothing after it in the
+chain runs: the api stays up and no restore pod starts. That holds even when you paste the whole
+block at once.
+
+**Step 1: pause the nightly backup and define the wait.** Pausing stops it from dumping a
+half-restored database.
+
 ```sh
-# pause the nightly backup so it cannot dump a half-restored database
 kubectl -n receipts patch cronjob receipts-pg-backup -p '{"spec":{"suspend":true}}'
-# Wait until no backup job is running: scheduled ones and manual `create job --from` ones
-# (all named receipts-pg-backup-*). It fails closed: a kubectl error or the 30-minute timeout
-# stops here (non-zero exit), and you must not go on with the restore until it passes.
-(
-  deadline=$((SECONDS + 1800))
+
+# Returns 0 only when no receipts-pg-backup-* job (scheduled or manual) is active.
+# Returns 1 on a kubectl error or after 30 minutes.
+receipts_wait_backups() {
+  local deadline=$((SECONDS + 1800)) out active
   while :; do
-    out=$(kubectl -n receipts get jobs -o jsonpath='{range .items[?(@.status.active)]}{.metadata.name}{"\n"}{end}') || { echo "kubectl failed; NOT safe to restore"; exit 1; }
+    out=$(kubectl -n receipts get jobs -o jsonpath='{range .items[?(@.status.active)]}{.metadata.name}{"\n"}{end}') \
+      || { echo "STOP: kubectl failed - do NOT restore"; return 1; }
     active=$(printf '%s\n' "$out" | grep '^receipts-pg-backup' || true)
-    [ -z "$active" ] && { echo "no backup running"; exit 0; }
-    [ "$SECONDS" -ge "$deadline" ] && { echo "timed out waiting for: $active"; exit 1; }
+    [ -z "$active" ] && { echo "OK: no backup running"; return 0; }
+    [ "$SECONDS" -ge "$deadline" ] && { echo "STOP: timed out waiting for: $active - do NOT restore"; return 1; }
     echo "waiting for: $active"; sleep 5
   done
-) || echo "STOP: do not restore yet"
-kubectl -n receipts scale deploy/receipts-api --replicas=0
-# the app=receipts-backup label is what the NetworkPolicy lets reach Postgres
-kubectl -n receipts run pg-restore --rm -it --restart=Never --labels=app=receipts-backup --image=postgres:16-bookworm \
+}
+```
+
+**Step 2: wait, stop the api, open the restore pod.** Nothing runs unless the wait printed `OK`.
+The `app=receipts-backup` label is what the NetworkPolicy lets reach Postgres.
+
+```sh
+receipts_wait_backups \
+&& kubectl -n receipts scale deploy/receipts-api --replicas=0 \
+&& kubectl -n receipts run pg-restore --rm -it --restart=Never --labels=app=receipts-backup --image=postgres:16-bookworm \
   --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":999,"runAsGroup":999,"fsGroup":999},"volumes":[{"name":"b","persistentVolumeClaim":{"claimName":"receipts-backups"}}],"containers":[{"name":"r","image":"postgres:16-bookworm","stdin":true,"tty":true,"command":["bash"],"volumeMounts":[{"name":"b","mountPath":"/backups"}],"env":[{"name":"PGHOST","value":"receipts-postgres"},{"name":"PGUSER","value":"receipts"},{"name":"PGPASSWORD","valueFrom":{"secretKeyRef":{"name":"receipts-app-secret","key":"db-password"}}}]}]}}'
-# inside the pod:
+```
+
+Inside the pod:
+
+```sh
 ls -1t /backups
 pg_restore --clean --if-exists --no-owner -d receipts /backups/receipts-<ts>.dump
 exit
+```
+
+**Step 3: bring the api back and resume backups.** Run this after a restore, and also after a
+`STOP` once you've dealt with the cause, so backups are never left paused.
+
+```sh
 kubectl -n receipts scale deploy/receipts-api --replicas=1
 kubectl -n receipts patch cronjob receipts-pg-backup -p '{"spec":{"suspend":false}}'   # resume backups
 kubectl -n receipts get cronjob receipts-pg-backup -o jsonpath='{.spec.suspend}'        # false

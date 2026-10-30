@@ -59,3 +59,17 @@
   waits for manual `receipts-pg-backup-*` jobs. The manual backup step uses `kubectl wait` with a
   15-minute timeout. The pre-flight checks a default StorageClass and that ESO serves
   `external-secrets.io/v1beta1`.
+
+## Phase 7.1 follow-ups (after PR #9 merged)
+- **Migration 016:** `go_is_blank(text)` uses the same whitespace set as Go's `unicode.IsSpace`
+  and `strings.TrimSpace`. Values in merchants.category and stores.address/phone that are blank by
+  that rule become NULL. Only rows that change are updated, and the replaced values are saved in
+  `migration_016_blanks`. 015's CHECKs are replaced with `go_is_blank` ones. Down is exact and
+  restores 015's CHECKs.
+- **updated_at:** 015 down and 016 down move `updated_at` on the rows they restore, because the
+  trigger sets now() and the old timestamps aren't saved. This is documented in the README and in
+  016's comments.
+- **DEPLOY restore:** the wait is now a `receipts_wait_backups` function, and step 2 is a single
+  `&&` chain, so a STOP (kubectl error or timeout) stops the scale-down and the restore pod.
+- **Tests:** older migration tests now roll back *to* a version, using `rollbackTo`, instead of a
+  fixed number of steps.

@@ -63,7 +63,7 @@ func TestMigration015BlankStoreFields(t *testing.T) {
 		}
 	}
 
-	must(database.RollbackMigrations(db, "../../migrations", 1))
+	must(rollbackTo(t, db, 14))
 	db.QueryRow(`SELECT category FROM merchants WHERE id = $1`, blankM).Scan(&cat)
 	db.QueryRow(`SELECT address FROM stores WHERE id = $1`, blankS).Scan(&addr)
 	if cat.String != "  " || !addr.Valid || addr.String != "" {

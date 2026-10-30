@@ -49,6 +49,20 @@ func migrateTo(t *testing.T, db *database.DB, n int) {
 	}
 }
 
+// rollbackTo rolls back until exactly n migrations are applied (independent of how many
+// migrations exist after n, so tests for older migrations keep working as new ones land).
+func rollbackTo(t *testing.T, db *database.DB, n int) error {
+	t.Helper()
+	var applied int
+	if err := db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&applied); err != nil {
+		return err
+	}
+	if applied <= n {
+		return nil
+	}
+	return database.RollbackMigrations(db, "../../migrations", applied-n)
+}
+
 func ptr[T any](v T) *T { return &v }
 
 func TestMigrationsUpDownUp(t *testing.T) {
