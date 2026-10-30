@@ -72,7 +72,7 @@ func TestMigration014LegacyStoreColumns(t *testing.T) {
 	}
 
 	// down 015 then 014: columns come back, refilled from the normalized tables.
-	if err := database.RollbackMigrations(db, "../../migrations", 2); err != nil {
+	if err := rollbackTo(t, db, 13); err != nil {
 		t.Fatal(err)
 	}
 	var name string
