@@ -106,14 +106,19 @@ spec:
               mountPath: /app/data/uploads
             - name: tmp          # heif-dec temp files (read-only root fs)
               mountPath: /tmp
+          # readiness pings the DB (2s timeout); liveness does not, so a DB outage only
+          # removes the pod from the Service instead of restart-looping it.
           readinessProbe:
-            httpGet: { path: /api/v1/health, port: http }
+            httpGet: { path: /readyz, port: http }
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
           livenessProbe:
             httpGet: { path: /api/v1/health, port: http }
             initialDelaySeconds: 30
             periodSeconds: 30
+            timeoutSeconds: 3
           securityContext:
             {{- include "receipts.containerSecurity" . | nindent 12 }}
           resources:
