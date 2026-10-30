@@ -225,30 +225,54 @@ The only full recovery from these losses is restoring the pre-upgrade backup (be
 
 ## Restore from a backup
 
+Run the restore in three steps. Step 2 is a single `&&` chain that starts with the wait. If the
+wait fails (a kubectl error or the 30-minute timeout), it prints `STOP` and nothing after it in the
+chain runs: the api stays up and no restore pod starts. That holds even when you paste the whole
+block at once.
+
+**Step 1: pause the nightly backup and define the wait.** Pausing stops it from dumping a
+half-restored database.
+
 ```sh
-# pause the nightly backup so it cannot dump a half-restored database
 kubectl -n receipts patch cronjob receipts-pg-backup -p '{"spec":{"suspend":true}}'
-# Wait until no backup job is running: scheduled ones and manual `create job --from` ones
-# (all named receipts-pg-backup-*). It fails closed: a kubectl error or the 30-minute timeout
-# stops here (non-zero exit), and you must not go on with the restore until it passes.
-(
-  deadline=$((SECONDS + 1800))
+
+# Returns 0 only when no receipts-pg-backup-* job (scheduled or manual) is active.
+# Returns 1 on a kubectl error or after 30 minutes.
+receipts_wait_backups() {
+  local deadline=$((SECONDS + 1800)) out active
   while :; do
-    out=$(kubectl -n receipts get jobs -o jsonpath='{range .items[?(@.status.active)]}{.metadata.name}{"\n"}{end}') || { echo "kubectl failed; NOT safe to restore"; exit 1; }
+    out=$(kubectl -n receipts get jobs -o jsonpath='{range .items[?(@.status.active)]}{.metadata.name}{"\n"}{end}') \
+      || { echo "STOP: kubectl failed - do NOT restore"; return 1; }
     active=$(printf '%s\n' "$out" | grep '^receipts-pg-backup' || true)
-    [ -z "$active" ] && { echo "no backup running"; exit 0; }
-    [ "$SECONDS" -ge "$deadline" ] && { echo "timed out waiting for: $active"; exit 1; }
+    [ -z "$active" ] && { echo "OK: no backup running"; return 0; }
+    [ "$SECONDS" -ge "$deadline" ] && { echo "STOP: timed out waiting for: $active - do NOT restore"; return 1; }
     echo "waiting for: $active"; sleep 5
   done
-) || echo "STOP: do not restore yet"
-kubectl -n receipts scale deploy/receipts-api --replicas=0
-# the app=receipts-backup label is what the NetworkPolicy lets reach Postgres
-kubectl -n receipts run pg-restore --rm -it --restart=Never --labels=app=receipts-backup --image=postgres:16-bookworm \
+}
+```
+
+**Step 2: wait, stop the api, open the restore pod.** Nothing runs unless the wait printed `OK`.
+The `app=receipts-backup` label is what the NetworkPolicy lets reach Postgres.
+
+```sh
+receipts_wait_backups \
+&& kubectl -n receipts scale deploy/receipts-api --replicas=0 \
+&& kubectl -n receipts run pg-restore --rm -it --restart=Never --labels=app=receipts-backup --image=postgres:16-bookworm \
   --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":999,"runAsGroup":999,"fsGroup":999},"volumes":[{"name":"b","persistentVolumeClaim":{"claimName":"receipts-backups"}}],"containers":[{"name":"r","image":"postgres:16-bookworm","stdin":true,"tty":true,"command":["bash"],"volumeMounts":[{"name":"b","mountPath":"/backups"}],"env":[{"name":"PGHOST","value":"receipts-postgres"},{"name":"PGUSER","value":"receipts"},{"name":"PGPASSWORD","valueFrom":{"secretKeyRef":{"name":"receipts-app-secret","key":"db-password"}}}]}]}}'
-# inside the pod:
+```
+
+Inside the pod:
+
+```sh
 ls -1t /backups
 pg_restore --clean --if-exists --no-owner -d receipts /backups/receipts-<ts>.dump
 exit
+```
+
+**Step 3: bring the api back and resume backups.** Run this after a restore, and also after a
+`STOP` once you've dealt with the cause, so backups are never left paused.
+
+```sh
 kubectl -n receipts scale deploy/receipts-api --replicas=1
 kubectl -n receipts patch cronjob receipts-pg-backup -p '{"spec":{"suspend":false}}'   # resume backups
 kubectl -n receipts get cronjob receipts-pg-backup -o jsonpath='{.spec.suspend}'        # false
