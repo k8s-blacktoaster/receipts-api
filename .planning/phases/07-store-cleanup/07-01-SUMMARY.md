@@ -35,3 +35,27 @@
 - `TestF7` and the guards test now use `printed_merchant_name`.
 - The CLI round trip works on :55434: `migrate down -steps 1` brings the 4 legacy columns back,
   and `migrate up` removes them again.
+
+## QA round 1 (PR #9 at ea0c33c)
+- **Major 1:** store_* values that can't be stored are rejected with a 422 (`ErrStoreField`) on API
+  create/PUT and the web form. Nothing is silently dropped. A merchant with no category gets it
+  written through. A category different from the merchant's existing one is rejected, not written
+  through, because the category is shared by every receipt of that merchant. A phone needs a store
+  location, and with one it writes through. Extraction stays lenient so no parse fails on these.
+  The web form no longer sends the loaded category back.
+- **Major 2:** DEPLOY.md section 6 explains rollback across migrations: migrate down with the new
+  image first, then roll the image back. It lists exactly what 014 down loses. `/readyz` checks
+  the schema with `database.CheckSchema` (expected versions from the image's migrations dir). Any
+  missing version (down-level or a gap) or unknown version (ahead) gives 503. This migration
+  system runs each migration in a transaction and has no dirty flag, so "dirty" means a gap or an
+  unknown version.
+- **Migration 015** (014 stays byte-identical to the pushed version): blank merchant category and
+  store address/phone become NULL. Only rows that change are updated, CHECKs keep blanks out, the
+  changed values are saved so down is exact, and the 014 down losses are written in its comments.
+- **Not possible without editing 014:** the "newest non-blank per column" backfill. 014 has already
+  dropped `receipts.store_*`, so 015 has nothing left to backfill from. 015 does clean up any
+  blanks that 014 copied.
+- **PR #8 follow-ups:** the backup wait fails closed (kubectl error or 30-minute timeout) and also
+  waits for manual `receipts-pg-backup-*` jobs. The manual backup step uses `kubectl wait` with a
+  15-minute timeout. The pre-flight checks a default StorageClass and that ESO serves
+  `external-secrets.io/v1beta1`.
