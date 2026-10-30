@@ -12,7 +12,10 @@ COPY . .
 
 # Unit tests. DB integration tests skip without TEST_DATABASE_URL; CI runs this stage's image
 # again with TEST_DATABASE_URL pointing at a throwaway Postgres (see .github/workflows/build-api.yml).
+# The race detector needs cgo, so only this stage gets a C toolchain (build stays CGO_ENABLED=0).
 FROM base AS test
+RUN apk add --no-cache build-base
+ENV CGO_ENABLED=1
 RUN go vet ./... && go test ./...
 
 FROM base AS build
