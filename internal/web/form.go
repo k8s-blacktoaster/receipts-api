@@ -55,6 +55,9 @@ func applyForm(rc *models.Receipt, f url.Values) error {
 		return c, nil
 	}
 	rc.StoreName = strings.TrimSpace(f.Get("store_name"))
+	// The form has no category field; the loaded value is the (old) merchant's, so sending it
+	// back could clash with a renamed-to merchant's category (ErrStoreField). Leave it alone.
+	rc.StoreCategory = ""
 	rc.Date = strings.TrimSpace(f.Get("date"))
 	rc.PaymentMethod = strings.TrimSpace(f.Get("payment_method"))
 	var err error

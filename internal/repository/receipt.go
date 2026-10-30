@@ -36,6 +36,14 @@ var ErrReceiptBusy = errors.New("receipt is queued for or undergoing extraction"
 // ErrNoPhoto is returned by RequestReextract for a receipt without a source document.
 var ErrNoPhoto = errors.New("receipt has no photo")
 
+// ErrStoreField: a store_* value the request sent cannot be stored (since migration 014 these
+// live on the shared merchant/store rows). Handlers map it to 422; nothing is written.
+var ErrStoreField = errors.New("store field cannot be saved")
+
+func storeFieldErr(format string, a ...any) error {
+	return fmt.Errorf("%w: %s", ErrStoreField, fmt.Sprintf(format, a...))
+}
+
 type ReceiptRepository interface {
 	Create(ctx context.Context, receipt *models.Receipt) error
 	GetByID(ctx context.Context, id int) (*models.Receipt, error)
@@ -86,13 +94,28 @@ type txExec interface {
 // resolveMerchantStore links the receipt to merchant/store. With keepMerchant (an edit that did
 // not change the printed store name) the existing merchant_id is kept, so a merchant renamed in
 // the UI is not re-derived from the printed name.
-func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt, keepMerchant bool) error {
+//
+// strict (user writes: API create/update, web form) rejects store_* values that would otherwise
+// be dropped with ErrStoreField. Extraction (strict=false) drops a phone that has no store
+// location to attach to, and never overrides a merchant's existing category.
+func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt, keepMerchant, strict bool) error {
 	r.StoreName = strings.TrimSpace(r.StoreName) // as printed (receipts.printed_merchant_name)
+	r.StoreCategory, r.StorePhone = strings.TrimSpace(r.StoreCategory), strings.TrimSpace(r.StorePhone)
 	r.StoreNumber = strings.TrimSpace(r.StoreNumber)
 	r.StoreAddress = strings.TrimSpace(r.StoreAddress)
 	r.StoreCity, r.StoreState, r.StoreZip = strings.TrimSpace(r.StoreCity), strings.TrimSpace(r.StoreState), strings.TrimSpace(r.StoreZip)
 	key := models.NormalizeMerchantName(r.StoreName)
+	hasLocation := r.StoreNumber != "" || r.StoreAddress != ""
+	if r.StorePhone != "" && !hasLocation {
+		if strict {
+			return storeFieldErr("store_phone is saved on the store location; send store_number or store_address with it")
+		}
+		r.StorePhone = ""
+	}
 	if key == "" {
+		if strict && (r.StoreCategory != "" || hasLocation) {
+			return storeFieldErr("store_category/store_number/store_address need a store_name (merchant)")
+		}
 		// photo receipts before/without a readable merchant: no merchant yet. The DB CHECK
 		// receipts_complete_when_parsed only allows that while uploaded/parsing/needs_review/failed.
 		r.MerchantID, r.StoreID = 0, nil
@@ -112,7 +135,10 @@ func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt, keep
 			return fmt.Errorf("failed to resolve merchant: %w", err)
 		}
 	}
-	if r.StoreNumber == "" && r.StoreAddress == "" {
+	if err := applyMerchantCategory(ctx, q, r, strict); err != nil {
+		return err
+	}
+	if !hasLocation {
 		r.StoreID = nil
 		return nil
 	}
@@ -144,6 +170,34 @@ func resolveMerchantStore(ctx context.Context, q txExec, r *models.Receipt, keep
 		return fmt.Errorf("failed to resolve store: %w", err)
 	}
 	r.StoreID = &id
+	return nil
+}
+
+// applyMerchantCategory writes store_category through to the merchant only when the merchant
+// has none yet. A different existing category is shared by all of the merchant's receipts, so a
+// receipt edit may not change it: strict -> ErrStoreField, extraction -> merchant's value kept.
+func applyMerchantCategory(ctx context.Context, q txExec, r *models.Receipt, strict bool) error {
+	if r.StoreCategory == "" {
+		return nil
+	}
+	var cur sql.NullString
+	if err := q.QueryRowContext(ctx, `SELECT category FROM merchants WHERE id = $1 FOR UPDATE`, r.MerchantID).Scan(&cur); err != nil {
+		return fmt.Errorf("failed to load merchant category: %w", err)
+	}
+	existing := strings.TrimSpace(cur.String)
+	switch {
+	case existing == "":
+		if _, err := q.ExecContext(ctx, `UPDATE merchants SET category = $2 WHERE id = $1 AND category IS DISTINCT FROM $2`, r.MerchantID, r.StoreCategory); err != nil {
+			return fmt.Errorf("failed to set merchant category: %w", err)
+		}
+	case strings.EqualFold(existing, r.StoreCategory):
+		r.StoreCategory = existing
+	case strict:
+		return storeFieldErr("store_category %q differs from the merchant's category %q, which is shared by all of its receipts; omit store_category or send %q",
+			r.StoreCategory, existing, existing)
+	default:
+		r.StoreCategory = existing
+	}
 	return nil
 }
 
@@ -216,7 +270,7 @@ func (r *receiptRepo) Create(ctx context.Context, receipt *models.Receipt) error
 
 func createReceiptTx(ctx context.Context, tx txExec, receipt *models.Receipt) error {
 	receipt.Normalize()
-	if err := resolveMerchantStore(ctx, tx, receipt, false); err != nil {
+	if err := resolveMerchantStore(ctx, tx, receipt, false, true); err != nil {
 		return err
 	}
 	now := time.Now()
@@ -376,7 +430,7 @@ func (r *receiptRepo) Update(ctx context.Context, receipt *models.Receipt) error
 	if keep {
 		receipt.MerchantID = oldMerchant.Int64
 	}
-	if err := writeReceiptTx(ctx, tx, receipt, keep); err != nil {
+	if err := writeReceiptTx(ctx, tx, receipt, keep, true); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -386,8 +440,8 @@ func (r *receiptRepo) Update(ctx context.Context, receipt *models.Receipt) error
 }
 
 // writeReceiptTx writes header fields and replaces children. Callers have locked the row.
-func writeReceiptTx(ctx context.Context, tx *sql.Tx, receipt *models.Receipt, keepMerchant bool) error {
-	if err := resolveMerchantStore(ctx, tx, receipt, keepMerchant); err != nil {
+func writeReceiptTx(ctx context.Context, tx *sql.Tx, receipt *models.Receipt, keepMerchant, strict bool) error {
+	if err := resolveMerchantStore(ctx, tx, receipt, keepMerchant, strict); err != nil {
 		return err
 	}
 	receipt.UpdatedAt = time.Now()
@@ -527,7 +581,7 @@ func (r *receiptRepo) CompleteParse(ctx context.Context, rc *models.Receipt, tok
 		return fmt.Errorf("failed to lock receipt: %w", err)
 	}
 	rc.Status = status
-	if err := writeReceiptTx(ctx, tx, rc, false); err != nil {
+	if err := writeReceiptTx(ctx, tx, rc, false, false); err != nil { // extraction: lenient
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE receipts SET parse_error = $2, parsed_at = now() WHERE id = $1`, rc.ID, nullStr(reason)); err != nil {

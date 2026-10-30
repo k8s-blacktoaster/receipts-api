@@ -355,6 +355,8 @@ func (u *UI) save(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, repository.ErrReceiptBusy):
 			u.detailError(w, r, http.StatusConflict, busyMsg)
+		case errors.Is(err, repository.ErrStoreField):
+			u.detailError(w, r, http.StatusUnprocessableEntity, err.Error())
 		case errors.Is(err, repository.ErrNotFound):
 			u.listWithError(w, r, http.StatusNotFound, "Receipt not found")
 		default:
