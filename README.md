@@ -248,8 +248,9 @@ Read-only [Model Context Protocol](https://modelcontextprotocol.io) tools over S
 - **Auth:** `Authorization: Bearer $MCP_TOKEN`. `MCP_TOKEN` (>= 32 chars, e.g. `openssl rand -hex 32`)
   is read from the environment; when it is unset the endpoint is not mounted. Requests with an
   `Origin` header from another host get 403. Keep it VPN-only like the rest of the app.
-- **Data:** only receipts with status `parsed`, `needs_review` or `reviewed`. Money is integer cents.
-  Every answer carries receipt ids and dates.
+- **Data:** only receipts with status `parsed` or `reviewed` by default. Every tool takes an optional
+  `include_needs_review: true` to also count receipts still in `needs_review`; each answer lists the
+  `counted_statuses` it used. Money is integer cents. Every answer carries receipt ids and dates.
 - **Merchant names** are normalized with `NormalizeMerchantName` ("Trader Joe's" -> `trader_joes`);
   merged-away names follow redirects; no exact match returns an error with pg_trgm candidates.
 
@@ -263,6 +264,10 @@ Read-only [Model Context Protocol](https://modelcontextprotocol.io) tools over S
 | `price_history` | `product_id`, `merchant`, `limit` | the newest `limit` purchases' unit prices, shown oldest first |
 
 Lists say `truncated` / `receipt_ids_truncated` when more rows exist than were returned.
+
+Decisions (phase 5.1): static bearer token for now (OAuth later); MCP stays on the API server;
+stateless JSON transport (no sessions/SSE); `search_purchases` is a case-insensitive substring
+match; `spend` sums receipt totals, tax included (tax and savings are reported per group).
 
 Try it:
 ```bash
