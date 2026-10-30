@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -264,5 +265,22 @@ func TestIncludeNeedsReviewScope(t *testing.T) {
 		if out, isErr := call(t, &fakeQuery{}, c.tool, bad); !isErr {
 			t.Fatalf("%s: string include_needs_review accepted: %v", c.tool, out)
 		}
+	}
+}
+
+func TestNullArgumentsRejected(t *testing.T) {
+	for _, c := range []struct{ tool, args string }{
+		{"list_merchants", `{"include_needs_review":null}`},
+		{"spend", `{"include_needs_review":null}`},
+		{"where_bought", `{"product_id":1,"include_needs_review":null}`},
+		{"search_purchases", `{"query":"coffee","limit":null}`},
+	} {
+		out, isErr := call(t, &fakeQuery{}, c.tool, c.args)
+		if !isErr || !strings.Contains(fmt.Sprint(out), "must not be null") {
+			t.Fatalf("%s %s: want null rejected, got %v", c.tool, c.args, out)
+		}
+	}
+	if _, isErr := call(t, &fakeQuery{}, "list_merchants", `{"include_needs_review":false}`); isErr {
+		t.Fatal("false must be accepted")
 	}
 }

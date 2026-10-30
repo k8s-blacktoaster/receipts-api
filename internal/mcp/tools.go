@@ -87,9 +87,13 @@ func decodeArgs(raw json.RawMessage, v any) error {
 			allowed[tag] = true
 		}
 	}
-	for k := range keys {
+	for k, v := range keys {
 		if !allowed[k] {
 			return bad("unknown argument %q", k)
+		}
+		// encoding/json silently treats null as "absent"; omit the key instead.
+		if bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+			return bad("%s must not be null (omit it for the default)", k)
 		}
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))

@@ -1,7 +1,7 @@
 {{- if .Values.networkPolicy.enabled }}
 # Ingress-only policies: default-deny all ingress in the namespace, then allow
 #   ingress controller -> api:8080, api (incl. migrate init container) -> postgres:5432,
-#   backup job -> postgres:5432.
+#   backup job and app=<release>-migrate one-off pods -> postgres:5432.
 # Egress is NOT restricted (api needs DNS + https to api.x.ai; images pull via the node).
 {{- $ns := .Values.namespace }}
 apiVersion: networking.k8s.io/v1
@@ -55,6 +55,10 @@ spec:
         - podSelector:
             matchLabels:
               app: {{ .Release.Name }}-backup
+        # one-off migration pods (DEPLOY.md migrate-down); not selected by the api Service
+        - podSelector:
+            matchLabels:
+              app: {{ .Release.Name }}-migrate
       ports:
         - protocol: TCP
           port: 5432
