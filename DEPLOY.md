@@ -96,14 +96,16 @@ summary prints the sha7. It only pushes after vet, unit and Postgres integration
 **If the run sits in "Queued" and never starts,** no runner can take it. The `[self-hosted, k3s]`
 runners are org-level, and their runner group must allow this repo. Go to Org settings ->
 Actions -> Runner groups -> (the group with the k3s runners) -> Repository access, then add
-`receipts-api` (or allow all repositories) and check that a runner is Idle/online. Then re-run
-the stuck run (for example the first main build, run 41001202323):
+`receipts-api` (or allow all repositories) and check that a runner is Idle/online. Then cancel any stale queued runs (they were queued
+before the runner had access; don't re-run them) and start a fresh build of `main`:
 
 ```sh
-gh run list -R k8s-blacktoaster/receipts-api -w build-api -L 5
-gh run cancel 41001202323 -R k8s-blacktoaster/receipts-api      # if it is still queued
-gh run rerun  41001202323 -R k8s-blacktoaster/receipts-api      # or: gh workflow run build-api -R k8s-blacktoaster/receipts-api --ref main
-gh run watch -R k8s-blacktoaster/receipts-api $(gh run list -R k8s-blacktoaster/receipts-api -w build-api -L 1 --json databaseId -q '.[0].databaseId')
+R=k8s-blacktoaster/receipts-api
+gh run list -R $R -w build-api -s queued --json databaseId -q '.[].databaseId' \
+  | xargs -n1 gh run cancel -R $R
+gh workflow run build-api -R $R --ref main
+sleep 5
+gh run watch -R $R $(gh run list -R $R -w build-api -L 1 --json databaseId -q '.[0].databaseId')
 ```
 
 ## 3. Deploy
