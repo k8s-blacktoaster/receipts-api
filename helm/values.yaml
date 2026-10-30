@@ -72,6 +72,17 @@ backup:
       cpu: 500m
       memory: 256Mi
 
+# Ingress-only NetworkPolicies (default deny + allow-list); egress is unrestricted.
+# ASSUMPTION: ingress-nginx runs in namespace "ingress-nginx" with the upstream chart's pod
+# label (world-cup-site has no NetworkPolicy to copy). Check with:
+#   kubectl get pods -A -l app.kubernetes.io/name=ingress-nginx --show-labels
+networkPolicy:
+  enabled: true
+  ingressController:
+    namespace: ingress-nginx
+    podLabels:
+      app.kubernetes.io/name: ingress-nginx
+
 ingress:
   enabled: true
   className: nginx
