@@ -93,6 +93,19 @@ running `ALTER ROLE receipts PASSWORD '...'` inside the database.
 Merge to `main` (or run the workflow manually: Actions -> build-api -> Run workflow). The job
 summary prints the sha7. It only pushes after vet, unit and Postgres integration tests pass.
 
+**If the run sits in "Queued" and never starts,** no runner can take it. The `[self-hosted, k3s]`
+runners are org-level, and their runner group must allow this repo. Go to Org settings ->
+Actions -> Runner groups -> (the group with the k3s runners) -> Repository access, then add
+`receipts-api` (or allow all repositories) and check that a runner is Idle/online. Then re-run
+the stuck run (for example the first main build, run 41001202323):
+
+```sh
+gh run list -R k8s-blacktoaster/receipts-api -w build-api -L 5
+gh run cancel 41001202323 -R k8s-blacktoaster/receipts-api      # if it is still queued
+gh run rerun  41001202323 -R k8s-blacktoaster/receipts-api      # or: gh workflow run build-api -R k8s-blacktoaster/receipts-api --ref main
+gh run watch -R k8s-blacktoaster/receipts-api $(gh run list -R k8s-blacktoaster/receipts-api -w build-api -L 1 --json databaseId -q '.[0].databaseId')
+```
+
 ## 3. Deploy
 
 ```sh
@@ -156,8 +169,8 @@ kubectl -n receipts delete job receipts-pg-backup-manual    # so the name can be
 ## 6. Roll back
 
 **Migrations are not all additive.** Migration 014 drops `receipts.store_category`,
-`store_address` and `store_phone` and renames `store_name` to `printed_merchant_name`. 015
-normalizes blank merchant and store fields to NULL. An image from before 014 running on a
+`store_address` and `store_phone` and renames `store_name` to `printed_merchant_name`. 015 and 016
+normalize blank merchant and store fields to NULL (016: any Go `strings.TrimSpace` whitespace). An image from before 014 running on a
 014+ database fails every receipt read with 500, while `/api/v1/health` stays 200. Images from
 this PR on also gate `/readyz` on the schema: when the applied migrations differ from the ones in
 the image (missing or unknown versions), the pod is not ready and the response lists the
@@ -186,7 +199,7 @@ schema.
    ```
 
 3. Migrate down with the current image. N = the number of migrations newer than the target image.
-   To go back to a pre-014 image, N=2 (015, then 014).
+   To go back to a pre-014 image, N=3 (016, then 015, then 014).
 
    ```sh
    # app=receipts-migrate: allowed to reach Postgres by the NetworkPolicy, but NOT selected by the
@@ -219,7 +232,8 @@ schema.
 - 014 up's writes to `merchants.category` and `stores.address`/`phone` stay; down doesn't undo
   them.
 
-`015` down is exact: it restores the blank values it replaced with NULL and drops its CHECKs.
+`016` and `015` down are exact for the data: they restore the blank values they replaced with NULL and
+put back the previous CHECKs. The restored rows do get `updated_at = now()`.
 
 The only full recovery from these losses is restoring the pre-upgrade backup (below).
 
