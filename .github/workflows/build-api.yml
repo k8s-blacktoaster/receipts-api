@@ -1,0 +1,103 @@
+name: build-api
+
+# Build & publish the API image on pushes to main (and on demand). Mirrors
+# world-cup-site/.github/workflows/build-backend.yml: self-hosted k3s runner using the host
+# Docker daemon (mounted /var/run/docker.sock), which is already logged in to
+# registry.k8s.blacktoaster.com, so there is no login step and no registry secret here.
+#
+# Gate: `docker build --target test` (go vet + unit tests in the golang image), then the same
+# test image runs the full suite, DB integration tests included, against a throwaway Postgres
+# (UTF-8 locale, same image as the chart) on a private Docker network. Nothing is pushed
+# unless both pass. No live LLM calls: tests use fakes only, and no XAI_API_KEY is provided.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cmd/**'
+      - 'internal/**'
+      - 'migrations/**'
+      - 'docs/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/build-api.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: build-api-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: registry.k8s.blacktoaster.com/receipts/api
+  PG_IMAGE: postgres:16-bookworm
+
+jobs:
+  build-publish:
+    runs-on: [self-hosted, k3s]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute image tag
+        id: meta
+        run: |
+          echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "run=receipts-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
+      - name: Test (vet + unit, in image)
+        run: docker build --target test -t "${{ steps.meta.outputs.run }}:test" .
+
+      - name: Start test Postgres
+        run: |
+          set -euo pipefail
+          docker network create "${{ steps.meta.outputs.run }}"
+          docker run -d --rm --name "${{ steps.meta.outputs.run }}-pg" --network "${{ steps.meta.outputs.run }}" \
+            -e POSTGRES_PASSWORD=ci -e POSTGRES_DB=receipts_test \
+            -e POSTGRES_INITDB_ARGS="--encoding=UTF8 --locale=en_US.UTF-8" -e LANG=en_US.UTF-8 \
+            "$PG_IMAGE"
+          for i in $(seq 1 60); do
+            docker exec "${{ steps.meta.outputs.run }}-pg" pg_isready -U postgres -d receipts_test && exit 0
+            sleep 2
+          done
+          echo "postgres did not become ready"; exit 1
+
+      - name: Test (integration, Postgres)
+        run: |
+          docker run --rm --network "${{ steps.meta.outputs.run }}" \
+            -e TEST_DATABASE_URL="postgres://postgres:ci@${{ steps.meta.outputs.run }}-pg:5432/receipts_test?sslmode=disable" \
+            "${{ steps.meta.outputs.run }}:test" go test -p 1 -count=1 ./...
+
+      - name: Stop test Postgres
+        if: always()
+        run: |
+          docker rm -f "${{ steps.meta.outputs.run }}-pg" 2>/dev/null || true
+          docker network rm "${{ steps.meta.outputs.run }}" 2>/dev/null || true
+          docker image rm "${{ steps.meta.outputs.run }}:test" 2>/dev/null || true
+
+      # Reuses the cached deps/compile layers from the test stage.
+      - name: Build image
+        run: docker build -t "$IMAGE:${{ steps.meta.outputs.sha }}" .
+
+      - name: Verify image
+        run: |
+          docker run --rm --entrypoint sh "$IMAGE:${{ steps.meta.outputs.sha }}" -c '
+            set -e
+            test "$(id -u)" = 1000
+            test -x ./receipts-api && test -x ./migrate
+            ls migrations/*.up.sql > /dev/null
+            command -v heif-dec
+          '
+
+      - name: Push image
+        run: docker push "$IMAGE:${{ steps.meta.outputs.sha }}"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Published API image"
+            echo ""
+            echo "- \`$IMAGE:${{ steps.meta.outputs.sha }}\` (immutable)"
+            echo ""
+            echo "Bump \`api.tag\` to \`${{ steps.meta.outputs.sha }}\` in helm/values.yaml (or pass \`--set api.tag=${{ steps.meta.outputs.sha }}\`) to deploy. See DEPLOY.md."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,4 @@
+self-hosted-runner:
+  # world-cup-site / receipts self-hosted runner on k3s
+  labels:
+    - k3s
