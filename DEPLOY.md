@@ -10,6 +10,36 @@ the image.
 | Host | `receipts.k8s.blacktoaster.com` (VPN only; cert from ClusterIssuer `vault-issuer`) |
 | Secrets | Vault KV `apps/receipts/app` -> ExternalSecret `receipts-app-secret` via ClusterSecretStore `vault-backend` |
 
+## 0. Pre-flight checklist
+
+Run these before the first install. Fix the values or the cluster before you continue.
+
+1. **k3s is v1.29.4 or newer.** The probes and NetworkPolicy behavior in the chart were written
+   for it.
+
+   ```sh
+   kubectl version -o json | jq -r .serverVersion.gitVersion      # e.g. v1.30.6+k3s1
+   kubectl get nodes -o wide                                       # VERSION column, every node
+   ```
+
+2. **The ingress-nginx namespace and pod labels match `networkPolicy.ingressController`** in
+   `helm/values.yaml`. The defaults are namespace `ingress-nginx` and label
+   `app.kubernetes.io/name=ingress-nginx`. If they don't match, the NetworkPolicy blocks all
+   traffic to the api.
+
+   ```sh
+   kubectl get ns ingress-nginx --show-labels        # needs kubernetes.io/metadata.name=ingress-nginx
+   kubectl -n ingress-nginx get pods -l app.kubernetes.io/name=ingress-nginx --show-labels   # at least one pod
+   kubectl get ingressclass nginx                    # ingress.className exists
+   ```
+
+   If the controller lives elsewhere, set
+   `--set networkPolicy.ingressController.namespace=<ns>` and the matching `podLabels`.
+
+3. **The cluster add-ons exist:**
+   - `kubectl get clustersecretstore vault-backend` shows `Ready`.
+   - `kubectl get clusterissuer vault-issuer` shows `Ready`.
+
 ## 1. Create the Vault secret (once)
 
 Path: **`apps/receipts/app`** (same KV mount `vault-backend` reads for `apps/wc2026/app`).
@@ -114,7 +144,9 @@ know, and every migration so far is additive. If a release ever needs a schema r
 paired down migration explicitly first, with the NEW image (it has the down files):
 
 ```sh
-kubectl -n receipts run migrate-down --rm -it --restart=Never --labels=app=receipts-api \
+# app=receipts-migrate: allowed to reach Postgres by the NetworkPolicy, but NOT selected by the
+# receipts-api Service, so the ingress never routes traffic to this pod
+kubectl -n receipts run migrate-down --rm -it --restart=Never --labels=app=receipts-migrate \
   --image=registry.k8s.blacktoaster.com/receipts/api:<new-sha7> \
   --overrides='{"spec":{"containers":[{"name":"m","image":"registry.k8s.blacktoaster.com/receipts/api:<new-sha7>","command":["./migrate","down","-steps","1"],"env":[{"name":"DB_PASSWORD","valueFrom":{"secretKeyRef":{"name":"receipts-app-secret","key":"db-password"}}},{"name":"DATABASE_URL","value":"postgres://receipts:$(DB_PASSWORD)@receipts-postgres:5432/receipts?sslmode=disable"}]}]}}'
 ```
@@ -126,7 +158,10 @@ Take a manual backup (above) before any schema rollback.
 ```sh
 # pause the nightly backup so it cannot dump a half-restored database
 kubectl -n receipts patch cronjob receipts-pg-backup -p '{"spec":{"suspend":true}}'
-kubectl -n receipts get jobs -l app=receipts-backup        # wait until none is running
+# wait until the CronJob has no active job (.status.active is empty)
+until [ -z "$(kubectl -n receipts get cronjob receipts-pg-backup -o jsonpath='{.status.active}')" ]; do
+  echo 'backup still running...'; sleep 5
+done
 kubectl -n receipts scale deploy/receipts-api --replicas=0
 # the app=receipts-backup label is what the NetworkPolicy lets reach Postgres
 kubectl -n receipts run pg-restore --rm -it --restart=Never --labels=app=receipts-backup --image=postgres:16-bookworm \
@@ -156,6 +191,7 @@ default. The allowed paths are:
 - ingress-nginx to api:8080
 - api pods (including the `migrate` init container) to postgres:5432
 - `app=receipts-backup` pods to postgres:5432
+- `app=receipts-migrate` one-off pods (migrate-down) to postgres:5432
 
 Egress is not restricted: the api needs DNS and HTTPS to `api.x.ai`.
 
@@ -167,7 +203,8 @@ kubectl get pods -A -l app.kubernetes.io/name=ingress-nginx --show-labels
 ```
 
 If it differs, set `networkPolicy.ingressController.*`, or set `networkPolicy.enabled=false`.
-Any ad-hoc pod that needs Postgres must carry `app=receipts-backup` or `app=receipts-api`.
+Any ad-hoc pod that needs Postgres must carry `app=receipts-backup` or `app=receipts-migrate`.
+Don't use `app=receipts-api`: the api Service would route traffic to that pod.
 The restore and migrate-down commands above already do.
 
 ## Memory (OPS-07)
