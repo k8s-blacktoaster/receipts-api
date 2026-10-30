@@ -6,6 +6,9 @@
 **Last updated:** 2026-10-27
 
 ## Notes
+- 2026-10-29 phase 6 (deploy readiness) on phase-06-deploy, independent of 5.1: Dockerfile, helm
+  chart, build-api CI, ExternalSecret apps/receipts/app, pg_dump CronJob, UTF-8 initdb, OPS-07
+  decode budget, DEPLOY.md. Nothing applied to the cluster. See phases/06-deploy/06-01-SUMMARY.md.
 - .planning/ created by hand following the gsd-core layout (PROJECT, REQUIREMENTS,
   ROADMAP, STATE, config.json, phases/NN-slug/). The `npx @opengsd/gsd-core` installer is
   interactive and installs runtime commands, so it was not run on this machine.

@@ -5,7 +5,7 @@
 - [x] **Phase 3: Mobile web UI** - camera capture, multi-photo, upload status, receipt list, review/edit
 - [x] **Phase 4: Normalization & review** - product matching, alias learning, review endpoints
 - [x] **Phase 5: MCP server** - read-only tools over Streamable HTTP + auth
-- [ ] **Phase 6: Kubernetes deploy & backups** - CNPG, object store, secrets, ingress, restore drill
+- [ ] **Phase 6: Kubernetes deploy & backups** (PR open on phase-06-deploy) - CNPG, object store, secrets, ingress, restore drill
 
 ### Phase 1: Schema & model hardening
 **Goal**: DB can represent a real receipt from any merchant faithfully
@@ -73,6 +73,8 @@ trigram index from migration 006.
     api.yaml (Deployment + Service; XAI_API_KEY and DB password from the synced Secret),
     externalsecret.yaml (properties xai-api-key, db-password), certificate.yaml, ingress.yaml,
     postgres (CNPG or StatefulSet) and a PVC for UPLOAD_DIR until the object store lands.
+
+**Plans**: 06-01 (phases/06-deploy) - see 06-01-SUMMARY.md
 
 ### Phase 7: Legacy column cleanup (later)
 **Depends on**: Phases 2-4 (all readers on merchant_id/store_id)
