@@ -15,43 +15,63 @@ import (
 )
 
 // QueryRepository is the read-only query surface used by the MCP server (phase 5).
-// Every method runs in a READ ONLY transaction and only counts receipts whose status is
-// parsed, needs_review or reviewed (CountedStatuses).
+// Every method runs in a READ ONLY transaction and only counts receipts whose status is in
+// Scope.Statuses(): parsed and reviewed by default, plus needs_review when
+// Scope.IncludeNeedsReview is set (phase 5.1 decision).
 type QueryRepository interface {
 	// ResolveMerchant normalizes name with models.NormalizeMerchantName (MCP-04) and returns the
 	// exact match (or merge redirect). With no exact match it returns nil plus up to `limit`
 	// pg_trgm candidates ranked by similarity (MCP-06). ErrInvalidMerchantName for an empty key.
-	ResolveMerchant(ctx context.Context, name string, limit int) (*models.MerchantSummary, []models.MerchantCandidate, error)
-	ListMerchants(ctx context.Context) ([]models.MerchantSummary, error)
+	ResolveMerchant(ctx context.Context, name string, limit int, sc Scope) (*models.MerchantSummary, []models.MerchantCandidate, error)
+	ListMerchants(ctx context.Context, sc Scope) ([]models.MerchantSummary, error)
 	// SearchPurchases finds line items whose name, raw text or mapped product name contains q,
 	// newest first. truncated reports that more than f.Limit rows matched.
 	SearchPurchases(ctx context.Context, f PurchaseFilter) (lines []models.PurchaseLine, truncated bool, err error)
 	// PriceHistory returns the newest `limit` purchases of a product (returns excluded), sorted
 	// oldest first for display. truncated reports that older purchases were left out.
-	PriceHistory(ctx context.Context, productID, merchantID int64, limit int) (lines []models.PurchaseLine, truncated bool, err error)
+	PriceHistory(ctx context.Context, productID, merchantID int64, limit int, sc Scope) (lines []models.PurchaseLine, truncated bool, err error)
 	// WhereBought aggregates every counted purchase of a product per merchant + store in SQL
 	// (newest location first) and returns the newest `limit` purchases.
-	WhereBought(ctx context.Context, productID int64, limit int) (*models.WhereBought, error)
+	WhereBought(ctx context.Context, productID int64, limit int, sc Scope) (*models.WhereBought, error)
 	// Spend totals receipts.total_cents grouped by "merchant" or "month".
 	Spend(ctx context.Context, f SpendFilter) ([]models.SpendGroup, error)
 	// LastPurchases returns the newest counted purchase of each product id.
-	LastPurchases(ctx context.Context, productIDs []int64) (map[int64]models.PurchaseLine, error)
+	LastPurchases(ctx context.Context, productIDs []int64, sc Scope) (map[int64]models.PurchaseLine, error)
 }
 
-// CountedStatuses are the receipt statuses whose data the query tools report.
-var CountedStatuses = []string{models.StatusParsed, models.StatusNeedsReview, models.StatusReviewed}
+// CountedStatuses are the receipt statuses the query tools report by default. needs_review
+// receipts are excluded (their totals/items may be wrong) unless Scope.IncludeNeedsReview.
+var CountedStatuses = []string{models.StatusParsed, models.StatusReviewed}
+
+// CountedStatusesWithReview adds needs_review (opt-in via Scope.IncludeNeedsReview).
+var CountedStatusesWithReview = []string{models.StatusParsed, models.StatusNeedsReview, models.StatusReviewed}
+
+// Scope selects which receipt statuses a query counts.
+type Scope struct {
+	IncludeNeedsReview bool
+}
+
+// Statuses returns the receipt statuses counted under s.
+func (s Scope) Statuses() []string {
+	if s.IncludeNeedsReview {
+		return CountedStatusesWithReview
+	}
+	return CountedStatuses
+}
 
 type PurchaseFilter struct {
 	Query      string
 	MerchantID int64  // 0 = any
 	From, To   string // YYYY-MM-DD, inclusive; "" = open
 	Limit      int
+	Scope      Scope
 }
 
 type SpendFilter struct {
 	MerchantID int64
 	From, To   string
 	GroupBy    string // "merchant" | "month"
+	Scope      Scope
 }
 
 type queryRepo struct{ db *database.DB }
@@ -83,10 +103,10 @@ func scanMerchantSummary(s rowScanner) (models.MerchantSummary, error) {
 	return m, err
 }
 
-func (r *queryRepo) ListMerchants(ctx context.Context) ([]models.MerchantSummary, error) {
+func (r *queryRepo) ListMerchants(ctx context.Context, sc Scope) ([]models.MerchantSummary, error) {
 	out := []models.MerchantSummary{}
 	err := r.readOnly(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, merchantSummarySQL+` GROUP BY m.id ORDER BY m.name`, pq.Array(CountedStatuses))
+		rows, err := tx.QueryContext(ctx, merchantSummarySQL+` GROUP BY m.id ORDER BY m.name`, pq.Array(sc.Statuses()))
 		if err != nil {
 			return fmt.Errorf("list merchants: %w", err)
 		}
@@ -103,7 +123,7 @@ func (r *queryRepo) ListMerchants(ctx context.Context) ([]models.MerchantSummary
 	return out, err
 }
 
-func (r *queryRepo) ResolveMerchant(ctx context.Context, name string, limit int) (*models.MerchantSummary, []models.MerchantCandidate, error) {
+func (r *queryRepo) ResolveMerchant(ctx context.Context, name string, limit int, sc Scope) (*models.MerchantSummary, []models.MerchantCandidate, error) {
 	key := models.NormalizeMerchantName(name)
 	if key == "" {
 		return nil, nil, ErrInvalidMerchantName
@@ -117,7 +137,7 @@ func (r *queryRepo) ResolveMerchant(ctx context.Context, name string, limit int)
 		m, err := scanMerchantSummary(tx.QueryRowContext(ctx, merchantSummarySQL+`
 			WHERE m.id = COALESCE((SELECT id FROM merchants WHERE name = $2),
 			                      (SELECT merchant_id FROM merchant_name_redirects WHERE name_key = $2))
-			GROUP BY m.id`, pq.Array(CountedStatuses), key))
+			GROUP BY m.id`, pq.Array(sc.Statuses()), key))
 		if err == nil {
 			found = &m
 			return nil
@@ -216,7 +236,7 @@ func (r *queryRepo) SearchPurchases(ctx context.Context, f PurchaseFilter) ([]mo
 			  AND ($4::date IS NULL OR r.date >= $4::date)
 			  AND ($5::date IS NULL OR r.date <= $5::date)
 			ORDER BY r.date DESC NULLS LAST, r.id DESC, ri.id
-			LIMIT $6`, pq.Array(CountedStatuses), q, f.MerchantID, nullDate(f.From), nullDate(f.To), limit+1)
+			LIMIT $6`, pq.Array(f.Scope.Statuses()), q, f.MerchantID, nullDate(f.From), nullDate(f.To), limit+1)
 		if err != nil {
 			return fmt.Errorf("search purchases: %w", err)
 		}
@@ -227,7 +247,7 @@ func (r *queryRepo) SearchPurchases(ctx context.Context, f PurchaseFilter) ([]mo
 	return out, truncated, err
 }
 
-func (r *queryRepo) PriceHistory(ctx context.Context, productID, merchantID int64, limit int) ([]models.PurchaseLine, bool, error) {
+func (r *queryRepo) PriceHistory(ctx context.Context, productID, merchantID int64, limit int, sc Scope) ([]models.PurchaseLine, bool, error) {
 	limit = clampLimit(limit)
 	var out []models.PurchaseLine
 	err := r.readOnly(ctx, func(tx *sql.Tx) error {
@@ -235,7 +255,7 @@ func (r *queryRepo) PriceHistory(ctx context.Context, productID, merchantID int6
 			WHERE r.status = ANY($1) AND ri.product_id = $2 AND NOT ri.is_return
 			  AND ($3::bigint = 0 OR r.merchant_id = $3)
 			ORDER BY r.date DESC NULLS LAST, r.id DESC, ri.id DESC
-			LIMIT $4`, pq.Array(CountedStatuses), productID, merchantID, limit+1)
+			LIMIT $4`, pq.Array(sc.Statuses()), productID, merchantID, limit+1)
 		if err != nil {
 			return fmt.Errorf("price history: %w", err)
 		}
@@ -253,7 +273,7 @@ func (r *queryRepo) PriceHistory(ctx context.Context, productID, merchantID int6
 // LocationReceiptIDs caps the receipt ids listed per where_bought location.
 const LocationReceiptIDs = 50
 
-func (r *queryRepo) WhereBought(ctx context.Context, productID int64, limit int) (*models.WhereBought, error) {
+func (r *queryRepo) WhereBought(ctx context.Context, productID int64, limit int, sc Scope) (*models.WhereBought, error) {
 	limit = clampLimit(limit)
 	wb := &models.WhereBought{Locations: []models.ProductLocation{}}
 	err := r.readOnly(ctx, func(tx *sql.Tx) error {
@@ -269,7 +289,7 @@ func (r *queryRepo) WhereBought(ctx context.Context, productID int64, limit int)
 			       (array_agg(l.receipt_id ORDER BY l.date DESC NULLS LAST, l.receipt_id DESC, l.item_id DESC))
 			FROM l JOIN merchants m ON m.id = l.merchant_id LEFT JOIN stores s ON s.id = l.store_id
 			GROUP BY l.merchant_id, m.name, l.store_id, s.store_number, s.address
-			ORDER BY max(l.date) DESC NULLS LAST, max(l.receipt_id) DESC`, pq.Array(CountedStatuses), productID)
+			ORDER BY max(l.date) DESC NULLS LAST, max(l.receipt_id) DESC`, pq.Array(sc.Statuses()), productID)
 		if err != nil {
 			return fmt.Errorf("where bought: %w", err)
 		}
@@ -300,7 +320,7 @@ func (r *queryRepo) WhereBought(ctx context.Context, productID int64, limit int)
 		prow, err := tx.QueryContext(ctx, purchaseLineSQL+`
 			WHERE r.status = ANY($1) AND ri.product_id = $2 AND NOT ri.is_return
 			ORDER BY r.date DESC NULLS LAST, r.id DESC, ri.id DESC
-			LIMIT $3`, pq.Array(CountedStatuses), productID, limit+1)
+			LIMIT $3`, pq.Array(sc.Statuses()), productID, limit+1)
 		if err != nil {
 			return fmt.Errorf("where bought purchases: %w", err)
 		}
@@ -317,7 +337,7 @@ func (r *queryRepo) WhereBought(ctx context.Context, productID int64, limit int)
 	return wb, nil
 }
 
-func (r *queryRepo) LastPurchases(ctx context.Context, ids []int64) (map[int64]models.PurchaseLine, error) {
+func (r *queryRepo) LastPurchases(ctx context.Context, ids []int64, sc Scope) (map[int64]models.PurchaseLine, error) {
 	out := map[int64]models.PurchaseLine{}
 	if len(ids) == 0 {
 		return out, nil
@@ -325,7 +345,7 @@ func (r *queryRepo) LastPurchases(ctx context.Context, ids []int64) (map[int64]m
 	err := r.readOnly(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `SELECT * FROM (`+purchaseLineSQL+`
 			WHERE r.status = ANY($1) AND ri.product_id = ANY($2) AND NOT ri.is_return
-			ORDER BY ri.product_id, r.date DESC NULLS LAST, r.id DESC, ri.id DESC) x`, pq.Array(CountedStatuses), pq.Array(ids))
+			ORDER BY ri.product_id, r.date DESC NULLS LAST, r.id DESC, ri.id DESC) x`, pq.Array(sc.Statuses()), pq.Array(ids))
 		if err != nil {
 			return fmt.Errorf("last purchases: %w", err)
 		}
@@ -370,7 +390,7 @@ func (r *queryRepo) Spend(ctx context.Context, f SpendFilter) ([]models.SpendGro
 			  AND ($2::bigint = 0 OR r.merchant_id = $2)
 			  AND ($3::date IS NULL OR r.date >= $3::date)
 			  AND ($4::date IS NULL OR r.date <= $4::date)
-			GROUP BY k ORDER BY k`, pq.Array(CountedStatuses), f.MerchantID, nullDate(f.From), nullDate(f.To), SpendReceiptIDs)
+			GROUP BY k ORDER BY k`, pq.Array(f.Scope.Statuses()), f.MerchantID, nullDate(f.From), nullDate(f.To), SpendReceiptIDs)
 		if err != nil {
 			return fmt.Errorf("spend: %w", err)
 		}

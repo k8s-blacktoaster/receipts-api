@@ -37,7 +37,7 @@ func TestQueryRepository(t *testing.T) {
 	}
 
 	// MCP-05: list with counts/last visit; failed receipt not counted.
-	ms, err := q.ListMerchants(ctx)
+	ms, err := q.ListMerchants(ctx, Scope{})
 	if err != nil || len(ms) != 2 {
 		t.Fatalf("merchants %+v %v", ms, err)
 	}
@@ -49,26 +49,26 @@ func TestQueryRepository(t *testing.T) {
 	}
 
 	// MCP-04: inputs normalized; MCP-06: fuzzy candidates when no exact match.
-	m, _, err := q.ResolveMerchant(ctx, "TRADER JOE’S", 5)
+	m, _, err := q.ResolveMerchant(ctx, "TRADER JOE’S", 5, Scope{})
 	if err != nil || m == nil || m.Name != "trader_joes" {
 		t.Fatalf("resolve exact %+v %v", m, err)
 	}
-	m, cands, err := q.ResolveMerchant(ctx, "Trader Joes Market", 5)
+	m, cands, err := q.ResolveMerchant(ctx, "Trader Joes Market", 5, Scope{})
 	if err != nil || m != nil || len(cands) == 0 || cands[0].Name != "trader_joes" {
 		t.Fatalf("fuzzy %+v %+v %v", m, cands, err)
 	}
-	if _, _, err := q.ResolveMerchant(ctx, "!!!", 5); !errors.Is(err, ErrInvalidMerchantName) {
+	if _, _, err := q.ResolveMerchant(ctx, "!!!", 5, Scope{}); !errors.Is(err, ErrInvalidMerchantName) {
 		t.Fatalf("empty key err %v", err)
 	}
 	// merged-away names resolve via redirects.
 	tj, cg := ms[1].ID, ms[0].ID
 	other := mk("TJs Old", "2026-01-01", 100)
-	om, _, _ := q.ResolveMerchant(ctx, "TJs Old", 1)
+	om, _, _ := q.ResolveMerchant(ctx, "TJs Old", 1, Scope{})
 	if _, err := merchants.Merge(ctx, om.ID, tj); err != nil {
 		t.Fatal(err)
 	}
 	_ = other
-	m, _, err = q.ResolveMerchant(ctx, "tjs old", 5)
+	m, _, err = q.ResolveMerchant(ctx, "tjs old", 5, Scope{})
 	if err != nil || m == nil || m.ID != tj {
 		t.Fatalf("redirect %+v %v", m, err)
 	}
@@ -84,15 +84,15 @@ func TestQueryRepository(t *testing.T) {
 	}
 
 	// price history oldest first.
-	h, _, err := q.PriceHistory(ctx, coffee.ID, 0, 0)
+	h, _, err := q.PriceHistory(ctx, coffee.ID, 0, 0, Scope{})
 	if err != nil || len(h) != 3 || h[0].UnitPriceCents != 1000 || h[2].UnitPriceCents != 1100 {
 		t.Fatalf("history %+v %v", h, err)
 	}
-	h, _, _ = q.PriceHistory(ctx, coffee.ID, cg, 0)
+	h, _, _ = q.PriceHistory(ctx, coffee.ID, cg, 0, Scope{})
 	if len(h) != 1 {
 		t.Fatalf("history by merchant %+v", h)
 	}
-	last, err := q.LastPurchases(ctx, []int64{coffee.ID, 999})
+	last, err := q.LastPurchases(ctx, []int64{coffee.ID, 999}, Scope{})
 	if err != nil || len(last) != 1 || last[coffee.ID].ReceiptID != int64(r3.ID) {
 		t.Fatalf("last %+v %v", last, err)
 	}
@@ -108,5 +108,50 @@ func TestQueryRepository(t *testing.T) {
 	}
 	if _, err := q.Spend(ctx, SpendFilter{GroupBy: "year"}); !errors.Is(err, ErrBadGroupBy) {
 		t.Fatalf("group by err %v", err)
+	}
+
+	// Phase 5.1: needs_review receipts are excluded by default and counted with IncludeNeedsReview.
+	nr := mk("Trader Joe's", "2026-03-01", 700, models.ReceiptItem{Name: "Coffee beans", Quantity: 1, UnitPriceCents: 700, NetTotalCents: 700})
+	if _, err := db.ExecContext(ctx, `UPDATE receipts SET status = 'needs_review' WHERE id = $1`, nr.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE receipt_items SET product_id = $1 WHERE receipt_id = $2`, coffee.ID, nr.ID); err != nil {
+		t.Fatal(err)
+	}
+	incl := Scope{IncludeNeedsReview: true}
+	base, _, _ := q.ResolveMerchant(ctx, "trader joes", 5, Scope{})
+	for _, sc := range []Scope{{}, incl} {
+		want := base.TotalSpentCents
+		if sc.IncludeNeedsReview {
+			want += 700
+		}
+		g, err := q.Spend(ctx, SpendFilter{MerchantID: tj, Scope: sc})
+		if err != nil || len(g) != 1 || g[0].TotalCents != want {
+			t.Fatalf("spend scope %+v: %+v %v", sc, g, err)
+		}
+		ms, _ := q.ListMerchants(ctx, sc)
+		if ms[1].TotalSpentCents != want {
+			t.Fatalf("merchants scope %+v: %+v", sc, ms[1])
+		}
+		lines, _, _ := q.SearchPurchases(ctx, PurchaseFilter{Query: "coffee", MerchantID: tj, Scope: sc})
+		if hasNR := len(lines) > 0 && lines[0].ReceiptID == int64(nr.ID); hasNR != sc.IncludeNeedsReview {
+			t.Fatalf("search scope %+v: %+v", sc, lines)
+		}
+		h, _, _ := q.PriceHistory(ctx, coffee.ID, 0, 0, sc)
+		if hasNR := h[len(h)-1].ReceiptID == int64(nr.ID); hasNR != sc.IncludeNeedsReview {
+			t.Fatalf("history scope %+v: %+v", sc, h)
+		}
+		wb, err := q.WhereBought(ctx, coffee.ID, 10, sc)
+		if err != nil || (wb.Purchases[0].ReceiptID == int64(nr.ID)) != sc.IncludeNeedsReview {
+			t.Fatalf("where bought scope %+v: %+v %v", sc, wb, err)
+		}
+		last, _ := q.LastPurchases(ctx, []int64{coffee.ID}, sc)
+		if (last[coffee.ID].ReceiptID == int64(nr.ID)) != sc.IncludeNeedsReview {
+			t.Fatalf("last purchase scope %+v: %+v", sc, last)
+		}
+		m, _, _ := q.ResolveMerchant(ctx, "trader joes", 5, sc)
+		if m.TotalSpentCents != want {
+			t.Fatalf("resolve scope %+v: %+v", sc, m)
+		}
 	}
 }

@@ -1,9 +1,9 @@
 # State
 
 **Milestone:** v1.0
-**Current phase:** 5 - MCP server
-**Status:** phases 1-4 merged (PR #1-#4); phase 5 on phase-05-mcp
-**Last updated:** 2026-10-27
+**Current phase:** 5.1 - MCP defaults (phase 6 deploy in parallel)
+**Status:** phases 1-5 merged (PR #1-#5); 5.1 on phase-05.1-mcp-defaults
+**Last updated:** 2026-10-29
 
 ## Notes
 - .planning/ created by hand following the gsd-core layout (PROJECT, REQUIREMENTS,
@@ -27,3 +27,6 @@
   the local .env key ("Incorrect API key provided").
 - 2026-10-28 phase 4 merged (PR #4, 248f3a4). Phase 5 (MCP server) executed on phase-05-mcp,
   PR open, awaiting QA. See phases/05-mcp-server/05-01-SUMMARY.md.
+- 2026-10-29 phase 5 merged (PR #5). Phase 5.1 decisions: static bearer, needs_review excluded by
+  default (include_needs_review opt-in), MCP on API server, stateless JSON, substring search,
+  spend incl. tax. See phases/05.1-mcp-defaults/05.1-01-SUMMARY.md.
