@@ -80,7 +80,7 @@ trigram index from migration 006.
 **Depends on**: Phases 2-4 (all readers on merchant_id/store_id)
 **Scope**: drop legacy receipts.store_* columns (store_name/category/address/phone as stored
 columns) once every reader uses merchants/stores; paired down migration restores them.
-**Status**: Executed on phase-07-store-cleanup (migrations 014 + 015), PR open - see phases/07-store-cleanup/07-01-SUMMARY.md
+**Status**: Executed on phase-07-store-cleanup (migrations 014 + 015, merged PR #9; 016 in phase 7.1) - see phases/07-store-cleanup/07-01-SUMMARY.md
 
 ## Decisions (2026-10-27, Jack via CoS)
 - Never edit a migration that has already been pushed; add a new one (from 013 on).

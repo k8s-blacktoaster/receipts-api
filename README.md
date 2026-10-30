@@ -335,8 +335,13 @@ The template includes a `products` table with:
   - `store_category`, `store_number` or `store_address` without a `store_name` is a 422.
   - Photo extraction is lenient: it never fails a parse over these. It drops a phone that has no
     store location and keeps the merchant's existing category.
-- 015 turns blank merchant categories and store addresses/phones into NULL. CHECK constraints keep
-  blanks out from then on.
+- 015 turned ASCII-blank merchant categories and store addresses/phones into NULL. 016 extends
+  "blank" to everything Go's `strings.TrimSpace` strips: tab, newline, NBSP U+00A0 and the other
+  `unicode.IsSpace` runes. It does this with the SQL function `go_is_blank()`, which
+  `TestGoBlankParity` checks against Go, and its CHECK constraints keep those values out.
+- `updated_at`: 015 up and 016 up update only the rows they change. Their down migrations restore
+  the saved values but not the old timestamps, so restored rows get `updated_at = now()` from the
+  update trigger.
 - Auto-run on startup
 - Uses `golang-migrate` library
 
