@@ -92,6 +92,7 @@ The API includes a complete Receipts CRUD API:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/v1/health` | Health check endpoint |
+| GET | `/readyz` | Readiness: 200 when the database answers a ping within 2s, else 503 (k8s readiness probe) |
 | GET | `/api/v1/receipts` | List all receipts |
 | GET | `/api/v1/receipts/{id}` | Get a single receipt |
 | POST | `/api/v1/receipts` | Create a new receipt |
@@ -239,7 +240,7 @@ Without a key the API still accepts uploads; they stay `uploaded` until a provid
 Read-only [Model Context Protocol](https://modelcontextprotocol.io) tools over Streamable HTTP at
 `POST /mcp` on the same server (JSON responses, stateless, no SSE; `GET /mcp` is 405).
 
-- **Auth:** `Authorization: Bearer $MCP_TOKEN`. `MCP_TOKEN` (>= 32 chars, e.g. `openssl rand -hex 32`)
+- **Auth:** `Authorization: Bearer $MCP_TOKEN`. `MCP_TOKEN` (at least 32 characters; generate with `openssl rand -hex 32`)
   is read from the environment; when it is unset the endpoint is not mounted. Requests with an
   `Origin` header from another host get 403. Keep it VPN-only like the rest of the app.
 - **Data:** only receipts with status `parsed`, `needs_review` or `reviewed`. Money is integer cents.

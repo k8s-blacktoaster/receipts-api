@@ -18,23 +18,24 @@ All three properties are required; the ExternalSecret will not sync if one is mi
 | Property | Becomes | How to generate |
 |---|---|---|
 | `xai-api-key` | `XAI_API_KEY` in the api pod | your xAI console key (`xai-...`) |
-| `mcp-token` | `MCP_TOKEN` (bearer for `POST /mcp`, >= 32 chars) | `openssl rand -hex 32` |
+| `mcp-token` | `MCP_TOKEN` (bearer for `POST /mcp`; at least 32 characters, the app refuses to start otherwise) | `openssl rand -hex 32` (64 hex characters) |
 | `db-password` | `POSTGRES_PASSWORD` (postgres), `DB_PASSWORD` -> `DATABASE_URL` (api, migrate), `PGPASSWORD` (backup) | `openssl rand -hex 24` (hex only: it is embedded in a URL) |
 
 Paste the values in your own terminal so they never land in shell history or a file:
 
 ```sh
-read -rs XAI && read -rs MCP     # paste each, Enter
+read -rs XAI                     # paste the xAI key, Enter
 vault kv put apps/receipts/app \
   xai-api-key="$XAI" \
-  mcp-token="$MCP" \
+  mcp-token="$(openssl rand -hex 32)" \
   db-password="$(openssl rand -hex 24)"
-unset XAI MCP
+unset XAI
 vault kv get -format=json apps/receipts/app | jq '.data.data | keys'   # ["db-password","mcp-token","xai-api-key"]
 ```
 
 (Use `vault kv put -mount=<mount> ...` if your KV mount is not the default path prefix used by
-`vault-backend`.) Keep the `mcp-token` somewhere your MCP client can read it.
+`vault-backend`.) Read the generated `mcp-token` back for your MCP client with
+`vault kv get -field=mcp-token apps/receipts/app`.
 
 `db-password` is only read by Postgres `initdb` on the first start. Changing it later means also
 running `ALTER ROLE receipts PASSWORD '...'` inside the database.
@@ -65,6 +66,7 @@ container retries until Postgres is up and applies all migrations, then the api 
 kubectl -n receipts get externalsecret,secret,pods,pvc,cronjob,certificate,ingress
 kubectl -n receipts get externalsecret receipts-app-secret -o jsonpath='{.status.conditions[0].reason}'  # SecretSynced
 kubectl -n receipts logs deploy/receipts-api -c migrate
+kubectl -n receipts exec deploy/receipts-api -- wget -qO- localhost:8080/readyz   # ok (DB reachable)
 kubectl -n receipts logs deploy/receipts-api | head -30     # "image decode budget", "HEIC uploads enabled"
 kubectl -n receipts exec statefulset/receipts-postgres -- \
   psql -U receipts -d receipts -Atc "select datcollate, pg_encoding_to_char(encoding) from pg_database where datname='receipts'"
@@ -83,7 +85,7 @@ curl -fsS -F image=@/path/to/receipt.jpg $H/api/v1/uploads | jq .      # 202, no
 curl -fsS $H/api/v1/receipts/<receipt_id> | jq .   # status: uploaded -> parsing -> parsed | needs_review
 
 # MCP: list the tools (MCP_TOKEN = the mcp-token from Vault)
-read -rs MCP_TOKEN
+MCP_TOKEN=$(vault kv get -field=mcp-token apps/receipts/app)
 curl -fsS $H/mcp -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq '.result.tools[].name'
@@ -112,7 +114,7 @@ know, and every migration so far is additive. If a release ever needs a schema r
 paired down migration explicitly first, with the NEW image (it has the down files):
 
 ```sh
-kubectl -n receipts run migrate-down --rm -it --restart=Never \
+kubectl -n receipts run migrate-down --rm -it --restart=Never --labels=app=receipts-api \
   --image=registry.k8s.blacktoaster.com/receipts/api:<new-sha7> \
   --overrides='{"spec":{"containers":[{"name":"m","image":"registry.k8s.blacktoaster.com/receipts/api:<new-sha7>","command":["./migrate","down","-steps","1"],"env":[{"name":"DB_PASSWORD","valueFrom":{"secretKeyRef":{"name":"receipts-app-secret","key":"db-password"}}},{"name":"DATABASE_URL","value":"postgres://receipts:$(DB_PASSWORD)@receipts-postgres:5432/receipts?sslmode=disable"}]}]}}'
 ```
@@ -122,14 +124,20 @@ Take a manual backup (above) before any schema rollback.
 ## Restore from a backup
 
 ```sh
+# pause the nightly backup so it cannot dump a half-restored database
+kubectl -n receipts patch cronjob receipts-pg-backup -p '{"spec":{"suspend":true}}'
+kubectl -n receipts get jobs -l app=receipts-backup        # wait until none is running
 kubectl -n receipts scale deploy/receipts-api --replicas=0
-kubectl -n receipts run pg-restore --rm -it --restart=Never --image=postgres:16-bookworm \
-  --overrides='{"spec":{"securityContext":{"runAsUser":999,"fsGroup":999},"volumes":[{"name":"b","persistentVolumeClaim":{"claimName":"receipts-backups"}}],"containers":[{"name":"r","image":"postgres:16-bookworm","stdin":true,"tty":true,"command":["bash"],"volumeMounts":[{"name":"b","mountPath":"/backups"}],"env":[{"name":"PGHOST","value":"receipts-postgres"},{"name":"PGUSER","value":"receipts"},{"name":"PGPASSWORD","valueFrom":{"secretKeyRef":{"name":"receipts-app-secret","key":"db-password"}}}]}]}}'
+# the app=receipts-backup label is what the NetworkPolicy lets reach Postgres
+kubectl -n receipts run pg-restore --rm -it --restart=Never --labels=app=receipts-backup --image=postgres:16-bookworm \
+  --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":999,"runAsGroup":999,"fsGroup":999},"volumes":[{"name":"b","persistentVolumeClaim":{"claimName":"receipts-backups"}}],"containers":[{"name":"r","image":"postgres:16-bookworm","stdin":true,"tty":true,"command":["bash"],"volumeMounts":[{"name":"b","mountPath":"/backups"}],"env":[{"name":"PGHOST","value":"receipts-postgres"},{"name":"PGUSER","value":"receipts"},{"name":"PGPASSWORD","valueFrom":{"secretKeyRef":{"name":"receipts-app-secret","key":"db-password"}}}]}]}}'
 # inside the pod:
 ls -1t /backups
 pg_restore --clean --if-exists --no-owner -d receipts /backups/receipts-<ts>.dump
 exit
 kubectl -n receipts scale deploy/receipts-api --replicas=1
+kubectl -n receipts patch cronjob receipts-pg-backup -p '{"spec":{"suspend":false}}'   # resume backups
+kubectl -n receipts get cronjob receipts-pg-backup -o jsonpath='{.spec.suspend}'        # false
 ```
 
 Do a restore drill into a scratch database (`createdb receipts_drill; pg_restore -d receipts_drill ...`)
@@ -139,6 +147,28 @@ Receipt photos live on the `receipts-uploads` PVC and are not in the pg_dump. Ba
 with the cluster's volume snapshots (or copy `/app/data/uploads`) until the object store lands.
 Both PVCs (`receipts-uploads`, `receipts-backups`) carry `helm.sh/resource-policy: keep`, so
 `helm uninstall` leaves them; the Postgres PVC comes from the StatefulSet and is also kept.
+
+## Network policy
+
+The chart installs ingress-only NetworkPolicies. All ingress in the namespace is denied by
+default. The allowed paths are:
+
+- ingress-nginx to api:8080
+- api pods (including the `migrate` init container) to postgres:5432
+- `app=receipts-backup` pods to postgres:5432
+
+Egress is not restricted: the api needs DNS and HTTPS to `api.x.ai`.
+
+**Assumption:** the ingress controller runs in namespace `ingress-nginx` with label
+`app.kubernetes.io/name=ingress-nginx`. world-cup-site has no NetworkPolicy to copy. Check it:
+
+```sh
+kubectl get pods -A -l app.kubernetes.io/name=ingress-nginx --show-labels
+```
+
+If it differs, set `networkPolicy.ingressController.*`, or set `networkPolicy.enabled=false`.
+Any ad-hoc pod that needs Postgres must carry `app=receipts-backup` or `app=receipts-api`.
+The restore and migrate-down commands above already do.
 
 ## Memory (OPS-07)
 
