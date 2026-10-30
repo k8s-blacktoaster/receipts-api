@@ -71,8 +71,8 @@ func TestMigration014LegacyStoreColumns(t *testing.T) {
 		t.Fatalf("receipt read %+v", rc)
 	}
 
-	// down 1: columns come back, refilled from the normalized tables.
-	if err := database.RollbackMigrations(db, "../../migrations", 1); err != nil {
+	// down 015 then 014: columns come back, refilled from the normalized tables.
+	if err := database.RollbackMigrations(db, "../../migrations", 2); err != nil {
 		t.Fatal(err)
 	}
 	var name string
