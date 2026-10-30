@@ -19,7 +19,15 @@ import (
 // UI registers the web pages (internal/web); nil disables the UI.
 type UI interface{ Register(r chi.Router) }
 
-func New(receiptHandler *handlers.ReceiptHandler, uploadHandler *handlers.UploadHandler, productHandler *handlers.ProductHandler, ui UI, logger *slog.Logger) http.Handler {
+// Mount is an extra handler served at an exact path for every method (e.g. the MCP endpoint
+// at /mcp). It gets the common middleware but not the JSON/same-origin guards: it does its own
+// auth and origin checks.
+type Mount struct {
+	Path    string
+	Handler http.Handler
+}
+
+func New(receiptHandler *handlers.ReceiptHandler, uploadHandler *handlers.UploadHandler, productHandler *handlers.ProductHandler, ui UI, logger *slog.Logger, mounts ...Mount) http.Handler {
 	r := chi.NewRouter()
 
 	// Middleware stack
@@ -59,6 +67,10 @@ func New(receiptHandler *handlers.ReceiptHandler, uploadHandler *handlers.Upload
 			r.Get("/api/v1/review/items", productHandler.ListReviewItems)                               // GET /api/v1/review/items
 			r.With(httpguard.RequireJSON).Post("/api/v1/review/items/{id}/map", productHandler.MapItem) // POST /api/v1/review/items/{id}/map
 		})
+	}
+
+	for _, m := range mounts {
+		r.Handle(m.Path, m.Handler)
 	}
 
 	if ui != nil {

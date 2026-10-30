@@ -3,6 +3,7 @@ package router
 import (
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -42,5 +43,24 @@ func TestAPIRoutesGuarded(t *testing.T) {
 		if rec.Code != c.want {
 			t.Errorf("%s %s: %d want %d (%s)", c.method, c.path, rec.Code, c.want, rec.Body)
 		}
+	}
+}
+
+func TestMountServesAllMethodsWithoutAPIGuards(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	called := 0
+	h := New(handlers.NewReceiptHandler(nil, logger), nil, nil, nil, logger,
+		Mount{Path: "/mcp", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called++; w.WriteHeader(299) })})
+	for _, m := range []string{"POST", "GET", "DELETE"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(m, "http://app.local/mcp", strings.NewReader("x")))
+		if rec.Code != 299 {
+			t.Fatalf("%s /mcp = %d", m, rec.Code)
+		}
+	}
+	rec := httptest.NewRecorder()
+	New(handlers.NewReceiptHandler(nil, logger), nil, nil, nil, logger).ServeHTTP(rec, httptest.NewRequest("POST", "http://app.local/mcp", nil))
+	if rec.Code != 404 || called != 3 {
+		t.Fatalf("unmounted /mcp = %d, called %d", rec.Code, called)
 	}
 }
