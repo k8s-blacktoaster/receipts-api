@@ -56,6 +56,22 @@ postgres:
       cpu: 500m
       memory: 512Mi
 
+# OPS-02: nightly pg_dump (custom format) to a PVC, keeping the newest `keep` dumps.
+backup:
+  enabled: true
+  schedule: "17 3 * * *"    # 03:17 cluster time
+  keep: 14
+  storage:
+    size: 5Gi
+    className: ""
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
 ingress:
   enabled: true
   className: nginx

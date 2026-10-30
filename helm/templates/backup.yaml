@@ -1,0 +1,92 @@
+{{- if .Values.backup.enabled }}
+# OPS-02: nightly logical backup. pg_dump -Fc into the backups PVC, newest .Values.backup.keep kept.
+# Restore: see DEPLOY.md ("Restore from a backup").
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-backups
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ .Release.Name }}-backup
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.backup.storage.className }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.backup.storage.size }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Release.Name }}-pg-backup
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: {{ .Release.Name }}-backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: {{ .Release.Name }}-backup
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            fsGroup: 999
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: pg-dump
+              image: {{ .Values.postgres.image }}
+              env:
+                - name: PGHOST
+                  value: {{ include "receipts.dbHost" . }}
+                - name: PGUSER
+                  value: {{ .Values.postgres.user }}
+                - name: PGDATABASE
+                  value: {{ .Values.postgres.database }}
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "receipts.secret" . }}
+                      key: db-password
+                - name: KEEP
+                  value: {{ .Values.backup.keep | quote }}
+              command:
+                - /bin/bash
+                - -ec
+                - |
+                  f=/backups/receipts-$(date -u +%Y%m%dT%H%M%SZ).dump
+                  pg_dump -Fc -f "$f.partial"
+                  pg_restore --list "$f.partial" > /dev/null   # dump must be readable
+                  mv "$f.partial" "$f"
+                  echo "wrote $f ($(du -h "$f" | cut -f1))"
+                  ls -1t /backups/receipts-*.dump | tail -n +$((KEEP + 1)) | xargs -r rm -v --
+                  rm -f /backups/*.partial
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ .Release.Name }}-backups
+{{- end }}
