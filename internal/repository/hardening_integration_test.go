@@ -136,7 +136,7 @@ func TestF6StoreUpsertByAddress(t *testing.T) {
 	mustExecErr(t, db, "stores_merchant_address_uniq", `INSERT INTO stores (merchant_id, address) VALUES ($1, '1 main st')`, a.MerchantID)
 }
 
-// F7: legacy store_name is nullable and views read merchant/store.
+// F7: the printed name is nullable and views read merchant/store (legacy store_* dropped in 014).
 func TestF7ViewsUseMerchantStore(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
@@ -145,8 +145,8 @@ func TestF7ViewsUseMerchantStore(t *testing.T) {
 	if err := repo.Create(ctx, r); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE receipts SET store_name = NULL, store_address = NULL WHERE id = $1`, r.ID); err != nil {
-		t.Fatalf("store_name should be nullable: %v", err)
+	if _, err := db.Exec(`UPDATE receipts SET printed_merchant_name = NULL WHERE id = $1`, r.ID); err != nil {
+		t.Fatalf("printed_merchant_name should be nullable: %v", err)
 	}
 	var name, addr string
 	if err := db.QueryRow(`SELECT store_name, store_address FROM receipt_details_view WHERE receipt_id = $1 LIMIT 1`, r.ID).Scan(&name, &addr); err != nil {

@@ -19,7 +19,7 @@ func TestEditGuardsAndReextractRequest(t *testing.T) {
 	}
 	setStatus := func(st string) {
 		t.Helper()
-		if _, err := db.Exec(`UPDATE receipts SET status=$2, store_name='Sprouts', date='2026-10-01',
+		if _, err := db.Exec(`UPDATE receipts SET status=$2, printed_merchant_name='Sprouts', date='2026-10-01',
 			merchant_id=(SELECT id FROM merchants LIMIT 1) WHERE id=$1`, rc.ID, st); err != nil {
 			t.Fatal(err)
 		}
